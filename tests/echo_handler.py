@@ -82,10 +82,34 @@ class _H(BaseHTTPRequestHandler):
         self.wfile.write(out)
 
 
+class _QuietHTTPServer(HTTPServer):
+    """HTTPServer that suppresses tracebacks for trivial peer-side
+    disconnects (port scanners, half-open probes, TCP health checks
+    that don't send a request line). These hit
+    `BaseHTTPRequestHandler.handle_one_request` mid-read and raise
+    ConnectionResetError / BrokenPipeError / TimeoutError. The
+    default `handle_error` dumps a 15-line traceback per occurrence,
+    which dominates the log when the port is exposed publicly via
+    `network_mode: host` — and there is nothing actionable in any
+    of them (server keeps serving, no state corruption)."""
+    _QUIET = (ConnectionResetError, BrokenPipeError, TimeoutError)
+
+    def handle_error(self, request, client_address):
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, self._QUIET):
+            # Single-line breadcrumb at DEBUG so the event is still
+            # countable for ops without filling the log with stacks.
+            LOGGER.debug("peer %s disconnected: %s",
+                         client_address, type(exc).__name__)
+            return
+        super().handle_error(request, client_address)
+
+
 def main() -> None:
     addr = ("0.0.0.0", 8081)
     LOGGER.info("echo handler listening on http://%s:%d", *addr)
-    HTTPServer(addr, _H).serve_forever()
+    _QuietHTTPServer(addr, _H).serve_forever()
 
 
 if __name__ == "__main__":
