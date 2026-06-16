@@ -29,11 +29,14 @@ interface DailyTrafficRow {
 const OPERATORS = ["airtel", "vodacom", "tigo", "halotel"] as const;
 type Operator = typeof OPERATORS[number];
 
+// Distinct brand-leaning fills so a stacked column stays readable even
+// when both red-family Vodacom & Airtel show on the same day. Static
+// Tailwind classes (NOT a template) so the JIT picks them up.
 const OPERATOR_FILL: Record<Operator, string> = {
-  airtel:  "bg-red-500",
-  vodacom: "bg-violet-500",
-  tigo:    "bg-amber-500",
-  halotel: "bg-emerald-500",
+  vodacom: "bg-red-700",     // brand red, darker
+  airtel:  "bg-red-400",     // brand red, lighter — pairs with vodacom
+  tigo:    "bg-blue-500",
+  halotel: "bg-orange-500",
 };
 
 // ---------------------------------------------------------------------
@@ -136,39 +139,48 @@ function buildMonthGrid(rows: DailyTrafficRow[], monthYM: string): DayCell[] {
 
 function TrafficBarChart({ rows, monthYM }: { rows: DailyTrafficRow[]; monthYM: string }) {
   const grid = buildMonthGrid(rows, monthYM);
-  const max = Math.max(1, ...grid.map((g) => g.total));
+  // Grouped bars: each sub-bar represents ONE MNO's count for ONE day,
+  // so the scale reference is the biggest single MNO-day cell — NOT
+  // the biggest day total (which was the stacked-bar reference). This
+  // way a bar's relative height is directly comparable to every other
+  // bar in the chart.
+  let max = 1;
+  for (const g of grid) {
+    for (const op of OPERATORS) {
+      const n = g.counts[op] ?? 0;
+      if (n > max) max = n;
+    }
+  }
   const grandTotal = grid.reduce((s, g) => s + g.total, 0);
 
   return (
     <div>
-      {/* Bars row — h-48 (192px) gives reasonable resolution across MNO mixes.
-          NOTE on CSS: we DO NOT use `items-end` here. Without it, columns
-          stretch to the full 192px (default `items-stretch`), giving the
-          segments inside something concrete to compute `height: X%`
-          against. With `items-end`, columns auto-size to content, segment
-          percents become percent-of-zero, and every bar renders invisible
-          even though the data is correct. `flex-col-reverse` is what
-          actually pins segments to the BOTTOM of the column — the empty
-          top portion just stays transparent. */}
+      {/* Bars row — each day is a sub-group of 4 narrow bars (one per
+          MNO) standing side-by-side. Within each day-group we use
+          `items-end` so each MNO bar grows up from the day's baseline.
+          Outer container DOESN'T use items-end (its children are the
+          day-groups, which need full height for their inner items-end
+          to reference; same percent-height trap as in the stacked
+          version's note). */}
       <div className="flex gap-1 h-48 border-b border-slate-200 dark:border-slate-800 pb-px">
         {grid.map((g) => (
           <div
             key={g.day}
-            className="flex-1 flex flex-col-reverse rounded-t overflow-hidden min-h-px"
+            className="flex-1 flex items-end gap-px h-full"
             title={`Day ${g.day} — ${g.total.toLocaleString()} legs`}
           >
             {OPERATORS.map((op) => {
-              const n = g.counts[op];
-              if (!n) return null;
+              const n = g.counts[op] ?? 0;
               const heightPct = (n / max) * 100;
               return (
                 <div
                   key={op}
-                  // shrink-0 keeps the explicit percent height from being
-                  // squashed when total segments don't fill the column —
-                  // otherwise flex's default shrink redistributes space
-                  // and the visual proportions stop matching the data.
-                  className={`${OPERATOR_FILL[op]} shrink-0`}
+                  // flex-1 reserves equal width for every MNO slot so
+                  // empty-traffic days still show 4 placeholders aligned
+                  // with neighbouring days. shrink-0 preserves the
+                  // explicit percent height against flex's default
+                  // shrink-and-redistribute behaviour.
+                  className={`flex-1 shrink-0 rounded-t ${OPERATOR_FILL[op]}`}
                   style={{ height: `${heightPct}%` }}
                   title={`${op}: ${n.toLocaleString()}`}
                 />
