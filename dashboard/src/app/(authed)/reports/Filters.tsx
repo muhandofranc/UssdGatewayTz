@@ -19,7 +19,7 @@ import type { ShortcodeOption } from "@/lib/reports";
 import { actionCreateExport } from "../exports/actions";
 
 const OPERATORS = ["vodacom", "airtel", "tigo", "halotel"] as const;
-const PAGE_SIZES = [25, 50, 100];
+const PAGE_SIZES = [10, 25, 50, 100];
 
 interface Props {
   defaults: ReportFilters;

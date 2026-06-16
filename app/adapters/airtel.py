@@ -86,8 +86,8 @@ from .. import db
 from ..unified import SessionEvent, UnifiedReply, UnifiedRequest
 from . import register
 from ._common import (
-    accumulate_ussd_string, normalise_msisdn, plain_text_reply,
-    read_query_or_form,
+    accumulate_ussd_string, normalise_dialed, normalise_msisdn,
+    plain_text_reply, read_query_or_form,
 )
 
 
@@ -97,20 +97,6 @@ def _partner_slug_from_path(req: Request) -> str:
     when the canonical /ussd/airtel entry was hit (test / manual)."""
     slug = (req.path_params.get("partner_slug") or "").strip().lower()
     return slug or "airtel"
-
-
-def _normalise_dialed(raw_input: str) -> str:
-    """The aggregator strips the leading '*' and trailing '#' from
-    the dialed code. Re-add them so the dialed_code field handlers
-    see matches the canonical USSD form (e.g. '147*03' → '*147*03#').
-    Input that doesn't look like a dial-string is returned as-is —
-    the caller decides whether to use it."""
-    raw_input = (raw_input or "").strip()
-    if not raw_input:
-        return ""
-    if raw_input.startswith("*") and raw_input.endswith("#"):
-        return raw_input
-    return f"*{raw_input}#"
 
 
 @register
@@ -152,14 +138,31 @@ class Airtel:
         if prior is None:
             # START — first time we see this session id.
             event   = SessionEvent.START
-            dialed  = _normalise_dialed(input_str)
+            dialed  = normalise_dialed(input_str)
             d["dialed_code"] = dialed
+
+            # Shortcut-in-initial-dial support: if a shortcode is
+            # registered for a PREFIX of the canonical dial, route to
+            # it and treat the suffix as the initial ussd_string.
+            # E.g. subscriber dials *148*69*0666743790# but only
+            # *148*69# is registered → route to *148*69#, ussd_string
+            # starts as '0666743790' on the very first leg.
+            #
+            # Precedence: dial-code match wins over the URL slug.
+            # Falls back to slug-based routing (existing behaviour for
+            # partner-slug registrations like 'airfun') when no
+            # canonical match exists.
+            ussd_string = ""
+            prefix_match = db.lookup_shortcode_by_dial_prefix(op_id, dialed)
+            if prefix_match is not None:
+                slug = prefix_match.code
+                ussd_string = prefix_match.remainder
+
             db.upsert_active_session(
                 session_id=sessionid, operator_id=op_id,
                 service_code=slug, shortcode_id=None,
-                msisdn=msisdn, ussd_string="",
+                msisdn=msisdn, ussd_string=ussd_string,
             )
-            ussd_string = ""
         else:
             # INPUT — accumulate the user's input onto the running
             # menu trail. Routing slug stays anchored to whatever was

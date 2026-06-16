@@ -310,13 +310,31 @@ class Halotel:
         # Build service_code + ussd_string per lifecycle.
         if event is SessionEvent.START:
             # msg IS the dialed code on type=100 (e.g. '*123#').
-            service_code = msg
+            # Normalise to canonical `*<digits>#` so a Halotel spec
+            # deviation (missing '*' / '#', URL-encoded '%23') doesn't
+            # break shortcode matching downstream. No-op for spec-
+            # conformant traffic.
+            from ._common import normalise_dialed
+            service_code = normalise_dialed(msg)
             ussd_string = ""
+
+            # Shortcut-in-initial-dial support: if a shortcode is
+            # registered for a PREFIX of the canonical dial, route to
+            # it and treat the suffix as the initial ussd_string.
+            # E.g. *148*69*0666743790# dialed but only *148*69#
+            # registered → route to *148*69#, ussd_string starts as
+            # '0666743790'. No-op when no shorter prefix matches.
+            prefix_match = db.lookup_shortcode_by_dial_prefix(
+                op_id, service_code)
+            if prefix_match is not None:
+                service_code = prefix_match.code
+                ussd_string  = prefix_match.remainder
+
             if auth_ok:
                 db.upsert_active_session(
                     session_id=transactionid, operator_id=op_id,
                     service_code=service_code, shortcode_id=None,
-                    msisdn=msisdn, ussd_string="",
+                    msisdn=msisdn, ussd_string=ussd_string,
                 )
         elif event is SessionEvent.INPUT:
             prior = db.get_active_session(transactionid, op_id)

@@ -145,7 +145,10 @@ function legsQuery(where, offset, limit) {
     text: `
       SELECT l.ts::text AS ts,
              l.operator_name,
-             s.code AS shortcode_code,
+             -- Prefer the configured shortcode label; fall back to the
+             -- dialed service_code so 'shortcode_not_found' rows still
+             -- show what the customer dialed instead of a blank cell.
+             COALESCE(s.code, l.service_code) AS shortcode_code,
              l.msisdn, l.session_id, l.direction,
              l.handler_response_action,
              l.error_class, l.handler_elapsed_ms,
@@ -169,6 +172,11 @@ function sessionsQuery(where, offset, limit) {
           session_id,
           operator_name,
           (array_agg(shortcode_id) FILTER (WHERE shortcode_id IS NOT NULL))[1] AS shortcode_id,
+          -- Carry the dialed service_code through so the outer SELECT
+          -- can fall back to it when the shortcodes JOIN misses (the
+          -- 'shortcode_not_found' case). Mirror of the lib/reports.ts
+          -- loadSessionPage CTE.
+          (array_agg(service_code  ORDER BY ts DESC NULLS LAST))[1] AS service_code,
           (array_agg(msisdn)       FILTER (WHERE msisdn       IS NOT NULL))[1] AS msisdn,
           MIN(ts) AS first_ts,
           MAX(ts) AS last_ts,
@@ -180,7 +188,7 @@ function sessionsQuery(where, offset, limit) {
           GROUP BY session_id, operator_name
       )
       SELECT g.session_id, g.operator_name,
-             s.code AS shortcode_code,
+             COALESCE(s.code, g.service_code) AS shortcode_code,
              g.msisdn,
              g.first_ts::text, g.last_ts::text,
              g.duration_secs, g.leg_count::int,

@@ -142,7 +142,10 @@ export async function loadReportPage(
   const rowsSql = `
     SELECT l.id::text, l.ts,
            l.operator_name,
-           s.code AS shortcode_code,
+           -- Prefer the configured shortcode label; fall back to the
+           -- dialed service_code so 'shortcode_not_found' rows still
+           -- show what the customer dialed instead of a blank cell.
+           COALESCE(s.code, l.service_code) AS shortcode_code,
            l.msisdn, l.session_id, l.direction,
            l.handler_response_action, l.handler_response_text,
            l.ussd_string, l.error_class, l.handler_elapsed_ms
@@ -376,12 +379,19 @@ export async function loadSessionPage(
   // CTE + LEFT JOIN to shortcodes for the human-friendly code.
   // The (array_agg ORDER BY ts DESC)[1] idiom pulls the LATEST leg's
   // value for "final_*" columns without window functions.
+  //
+  // `service_code` is rolled up too so the outer SELECT can fall
+  // back to it when the LEFT JOIN to shortcodes misses (every leg
+  // had shortcode_id IS NULL — the 'shortcode_not_found' case).
+  // Without this, the report would show a blank ShortCode cell
+  // instead of what the customer actually dialed.
   const rowsSql = `
     WITH grouped AS (
       SELECT
         session_id,
         operator_name,
         (array_agg(shortcode_id) FILTER (WHERE shortcode_id IS NOT NULL))[1] AS shortcode_id,
+        (array_agg(service_code  ORDER BY ts DESC NULLS LAST))[1] AS service_code,
         (array_agg(msisdn)       FILTER (WHERE msisdn       IS NOT NULL))[1] AS msisdn,
         MIN(ts) AS first_ts,
         MAX(ts) AS last_ts,
@@ -405,7 +415,10 @@ export async function loadSessionPage(
     )
     SELECT
       g.session_id, g.operator_name,
-      s.code AS shortcode_code,
+      -- Prefer the configured shortcode label; fall back to the
+      -- dialed service_code so 'shortcode_not_found' sessions still
+      -- show what the customer dialed.
+      COALESCE(s.code, g.service_code) AS shortcode_code,
       g.msisdn,
       g.first_ts::text, g.last_ts::text,
       g.duration_secs, g.leg_count::int,

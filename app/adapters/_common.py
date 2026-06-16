@@ -26,6 +26,37 @@ def normalise_msisdn(raw: str | None) -> str:
     return (raw or "").lstrip("+").strip()
 
 
+def normalise_dialed(raw: str | None) -> str:
+    """Normalise a dialed USSD code into canonical `*<digits>#` form.
+
+    Different aggregators have been observed sending the SAME code in
+    several variants for the same shortcode (*148*69#):
+
+        '148*69'      no leading '*',  no trailing '#'
+        '*148*69'     leading '*',     no trailing '#'
+        '148*69#'     no leading '*',  trailing '#'
+        '*148*69#'    leading '*',     trailing '#'   (canonical)
+
+    All collapse to '*148*69#'. A handler that keys off the canonical
+    form (shortcode matching, audit logs) then sees one consistent
+    value regardless of which variant the aggregator picked.
+
+    Defensive against:
+      * extra leading '*' or trailing '#' characters (multiple stripped)
+      * URL-encoded '#' that survived as '%23' through a buggy proxy
+
+    Empty / whitespace-only / '#'-only inputs return ''.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    raw = raw.replace("%23", "#")
+    core = raw.lstrip("*").rstrip("#")
+    if not core:
+        return ""
+    return f"*{core}#"
+
+
 async def read_query_or_form(req: Request) -> dict:
     """Merge query string + form body into one dict (form wins on
     collision since it's the explicit payload). Falls back to JSON

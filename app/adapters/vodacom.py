@@ -79,7 +79,8 @@ from .. import db
 from ..unified import SessionEvent, UnifiedReply, UnifiedRequest
 from . import register
 from ._common import (
-    accumulate_ussd_string, normalise_msisdn, read_query_or_form,
+    accumulate_ussd_string, normalise_dialed, normalise_msisdn,
+    read_query_or_form,
     read_xml_body, xml_reply_truroute, xtext,
 )
 
@@ -165,13 +166,30 @@ class Vodacom:
         if event is SessionEvent.START:
             # First leg: msg IS the dialed service code. Open a
             # session-state row so subsequent legs can resolve it.
-            service_code = msg or ""
+            # Normalise to canonical `*<digits>#` so a TruRoute spec
+            # deviation (missing '*' / '#', URL-encoded '%23') doesn't
+            # break shortcode matching downstream. No-op for spec-
+            # conformant traffic.
+            service_code = normalise_dialed(msg)
+            ussd_string = ""
+
+            # Shortcut-in-initial-dial support: if a shortcode is
+            # registered for a PREFIX of the canonical dial, route to
+            # it and treat the suffix as the initial ussd_string.
+            # E.g. *148*69*0666743790# dialed but only *148*69#
+            # registered → route to *148*69#, ussd_string starts as
+            # '0666743790'. No-op when no shorter prefix matches.
+            prefix_match = db.lookup_shortcode_by_dial_prefix(
+                op_id, service_code)
+            if prefix_match is not None:
+                service_code = prefix_match.code
+                ussd_string  = prefix_match.remainder
+
             db.upsert_active_session(
                 session_id=sessionid, operator_id=op_id,
                 service_code=service_code, shortcode_id=None,
-                msisdn=msisdn, ussd_string="",
+                msisdn=msisdn, ussd_string=ussd_string,
             )
-            ussd_string = ""
         elif event is SessionEvent.INPUT:
             # Subsequent leg: look up service_code + the prior trail,
             # append this leg's msg to it, and refresh the row.

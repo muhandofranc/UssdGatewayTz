@@ -70,7 +70,8 @@ from .. import db
 from ..unified import SessionEvent, UnifiedReply, UnifiedRequest
 from . import register
 from ._common import (
-    accumulate_ussd_string, normalise_msisdn, plain_text_reply,
+    accumulate_ussd_string, normalise_dialed, normalise_msisdn,
+    plain_text_reply,
     read_query_or_form,
 )
 
@@ -163,18 +164,39 @@ class Tigo:
             # legs can recover both the partner slug (in case the
             # wildcard route ever serves a stale URL) and the dialed
             # code. We cache the SLUG in service_code (because slug
-            # is what we look up in shortcodes), and stash the dialed
-            # form on msisdn-shaped fields... actually we keep dialed
-            # in ussd_string=''+session-row-extra: no, the
-            # ussd_active_sessions table only has one cached
-            # service_code column. Store the slug there. Dialed lives
-            # in raw_payload on every leg.
+            # is what we look up in shortcodes by default), and the
+            # dialed form lives in raw_payload on every leg.
+            ussd_string = ""
+
+            # Shortcut-in-initial-dial support: if a shortcode is
+            # registered for a PREFIX of the canonical dial, route to
+            # it (overriding the URL slug) and treat the suffix as
+            # the initial ussd_string.
+            #
+            # Per production samples observed at /ussd/{glp,kopagas,
+            # tz411,zola}tigo, BOTH Tigo schemes carry the dialed
+            # code on START:
+            #   * Scheme A (glptigo, zolatigo): NEW_REQUEST=1 with
+            #     `Ussd_string=*148*43` (dialed code, no trailing #).
+            #   * Scheme B (kopagastigo, tz411tigo): every leg carries
+            #     `SHORT_CODE=*148*33` / `*147*04` (canonical dial).
+            # `_dialed_code()` already returns whichever is present,
+            # so a single normalise + lookup covers both. Falls back
+            # to the URL slug (existing behaviour) when no canonical-
+            # form shortcode is registered.
+            if dialed:
+                canonical = normalise_dialed(dialed)
+                prefix_match = db.lookup_shortcode_by_dial_prefix(
+                    op_id, canonical)
+                if prefix_match is not None:
+                    slug = prefix_match.code
+                    ussd_string = prefix_match.remainder
+
             db.upsert_active_session(
                 session_id=sessionid, operator_id=op_id,
                 service_code=slug, shortcode_id=None,
-                msisdn=msisdn, ussd_string="",
+                msisdn=msisdn, ussd_string=ussd_string,
             )
-            ussd_string = ""
         else:
             prior = db.get_active_session(sessionid, op_id)
             if prior is None:
