@@ -141,8 +141,16 @@ function TrafficBarChart({ rows, monthYM }: { rows: DailyTrafficRow[]; monthYM: 
 
   return (
     <div>
-      {/* Bars row — h-48 (192px) gives reasonable resolution across MNO mixes */}
-      <div className="flex items-end gap-1 h-48 border-b border-slate-200 dark:border-slate-800 pb-px">
+      {/* Bars row — h-48 (192px) gives reasonable resolution across MNO mixes.
+          NOTE on CSS: we DO NOT use `items-end` here. Without it, columns
+          stretch to the full 192px (default `items-stretch`), giving the
+          segments inside something concrete to compute `height: X%`
+          against. With `items-end`, columns auto-size to content, segment
+          percents become percent-of-zero, and every bar renders invisible
+          even though the data is correct. `flex-col-reverse` is what
+          actually pins segments to the BOTTOM of the column — the empty
+          top portion just stays transparent. */}
+      <div className="flex gap-1 h-48 border-b border-slate-200 dark:border-slate-800 pb-px">
         {grid.map((g) => (
           <div
             key={g.day}
@@ -156,7 +164,11 @@ function TrafficBarChart({ rows, monthYM }: { rows: DailyTrafficRow[]; monthYM: 
               return (
                 <div
                   key={op}
-                  className={OPERATOR_FILL[op]}
+                  // shrink-0 keeps the explicit percent height from being
+                  // squashed when total segments don't fill the column —
+                  // otherwise flex's default shrink redistributes space
+                  // and the visual proportions stop matching the data.
+                  className={`${OPERATOR_FILL[op]} shrink-0`}
                   style={{ height: `${heightPct}%` }}
                   title={`${op}: ${n.toLocaleString()}`}
                 />
