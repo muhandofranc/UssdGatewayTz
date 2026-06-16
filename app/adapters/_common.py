@@ -26,6 +26,38 @@ def normalise_msisdn(raw: str | None) -> str:
     return (raw or "").lstrip("+").strip()
 
 
+def canonical_shortcode(canonical_dial: str | None) -> str:
+    """Derive the canonical TZ USSD short code from a (possibly
+    longer) dialed string.
+
+    Tanzania USSD short codes follow `*<digits>*<digits>#`
+    (e.g. *123*12#, *148*69#, *147*04#). When a subscriber dials
+    inline with a menu shortcut (e.g. *148*69*255689492319#), the
+    registered short code is `*148*69#` and the trailing segments
+    are the initial menu input.
+
+    Heuristic: take the first TWO segments of the dial string and
+    re-wrap them as `*<seg1>*<seg2>#`. If only one segment is
+    present (e.g. *123#) it stays as `*<seg1>#`.
+
+        '*148*69#'                 -> '*148*69#'
+        '*148*69*255689492319#'    -> '*148*69#'
+        '*148*69*1*2*3#'           -> '*148*69#'
+        '*123#'                    -> '*123#'
+
+    Empty / whitespace / '#'-only inputs return ''.
+    """
+    core = (canonical_dial or "").strip().lstrip("*").rstrip("#")
+    if not core:
+        return ""
+    segments = core.split("*")
+    # Drop empty segments (defensive against `*148**69#` style noise).
+    segments = [s for s in segments if s]
+    if not segments:
+        return ""
+    return "*" + "*".join(segments[:2]) + "#"
+
+
 def normalise_dialed(raw: str | None) -> str:
     """Normalise a dialed USSD code into canonical `*<digits>#` form.
 

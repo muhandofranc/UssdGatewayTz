@@ -344,11 +344,12 @@ async def _handle_ussd(req: Request, operator_key: str) -> Response:
         # Also expire any session-cache row so we don't get a stuck
         # session pointing at a no-longer-configured shortcode.
         expire_active_session(ur.session_id, _operator_id_or_zero(operator_key))
+        eff_code = _log_service_code(ur)
         log_leg(
             operator_id=_operator_id_or_zero(operator_key),
             operator_name=operator_key,
             shortcode_id=None,
-            service_code=ur.service_code,
+            service_code=eff_code,
             session_id=ur.session_id,
             msisdn=ur.msisdn,
             ussd_string=ur.ussd_string,
@@ -361,7 +362,7 @@ async def _handle_ussd(req: Request, operator_key: str) -> Response:
             handler_response_text=reply.message,
             handler_elapsed_ms=None,
             error_class="shortcode_not_found",
-            error_detail=f"no active shortcode for operator={operator_key} code={ur.service_code}",
+            error_detail=f"no active shortcode for operator={operator_key} code={eff_code}",
         )
         return resp
 
@@ -491,9 +492,16 @@ async def _async_canned_push(
     except Exception:
         LOGGER.exception("expire_active_session failed")
 
+    # When the canned-push path is the shortcode_not_found branch
+    # (no shortcode_id supplied), prefer the customer's dialed code
+    # over the URL slug fallback so the log row carries something
+    # actionable for triage. For maintenance/deactivated paths the
+    # shortcode_id is set and ur.service_code is the matched code, so
+    # _log_service_code returns the same value either way.
+    eff_code = _log_service_code(ur) if shortcode_id is None else ur.service_code
     log_leg(
         operator_id=op_id, operator_name=op_name,
-        shortcode_id=shortcode_id, service_code=ur.service_code,
+        shortcode_id=shortcode_id, service_code=eff_code,
         session_id=ur.session_id, msisdn=ur.msisdn,
         ussd_string=ur.ussd_string,
         direction="async_outbound",
@@ -514,6 +522,35 @@ async def _async_canned_push(
 # because the DB pool may not be ready yet during module import; the
 # first request through any route warms it.
 _OPERATOR_ID_CACHE: dict[str, int] = {}
+
+
+def _log_service_code(ur: UnifiedRequest) -> str:
+    """Value to log in ussd_session_logs.service_code.
+
+    Derives the canonical TZ short code (`*<digits>*<digits>#`) from
+    the customer's dialed string when present in raw_payload — gives
+    a single consistent column value across:
+
+      * partner-slug adapters (Airtel / Tigo) where ur.service_code
+        is the URL slug ('airtel', 'airfun', …) on the unmatched
+        path — slug isn't actionable for triage
+      * canonical-form adapters (Vodacom / Halotel) where
+        ur.service_code is the FULL dialed string (e.g.
+        '*148*69*255689492319#') — too long to skim in the column
+      * successful routes where ur.service_code already IS the
+        canonical short code — derivation returns the same value
+
+    Falls back to ur.service_code when raw_payload has no
+    'dialed_code' field (e.g. the auth_failed / terminal-event log
+    sites which don't go through a dial-code parse).
+    """
+    from .adapters._common import canonical_shortcode
+    dialed = (ur.raw_payload or {}).get("dialed_code")
+    if dialed:
+        derived = canonical_shortcode(dialed)
+        if derived:
+            return derived
+    return ur.service_code
 
 
 def _operator_id_or_zero(name: str) -> int:

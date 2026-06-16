@@ -164,11 +164,17 @@ def lookup_shortcode_by_dial_prefix(
         for i in range(len(segments), 0, -1)
     ]
     with _conn() as c, c.cursor() as cur:
+        # Parity with resolve_shortcode: return the row regardless of
+        # `active`. The downstream resolve_shortcode + status_message_for
+        # path renders maintenance/deactivated messages with the
+        # correct shortcode_id attached. Filtering by active=TRUE here
+        # would mis-route a paused shortcode to slug-fallback /
+        # shortcode_not_found, losing the owner-authored message and
+        # the audit link to the actual row.
         cur.execute(
             "SELECT code FROM shortcodes "
             " WHERE operator_id = %s "
             "   AND code = ANY(%s::text[]) "
-            "   AND active = TRUE "
             " ORDER BY length(code) DESC "
             " LIMIT 1",
             (operator_id, candidates),
