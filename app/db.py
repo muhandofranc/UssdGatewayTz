@@ -1,0 +1,261 @@
+"""Postgres pool + the two queries the gateway hot-path needs.
+
+We keep the DB layer tiny on purpose:
+  * `resolve_shortcode`  — lookup handler URL + auth for an incoming
+                           (operator, service_code). One indexed query.
+  * `log_leg`             — INSERT into ussd_session_logs. Best-effort:
+                           a logging failure NEVER blocks the MNO
+                           response (the row is the post-hoc record;
+                           the wire reply is what the customer sees).
+
+`psycopg2.pool.ThreadedConnectionPool` is fine — FastAPI runs the
+sync DB calls in its thread executor; for a real high-QPS deploy
+switch to `asyncpg` + a per-loop pool (Phase 4).
+"""
+from __future__ import annotations
+
+import json
+import logging
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Optional
+
+import psycopg2
+import psycopg2.extras
+from psycopg2.pool import ThreadedConnectionPool
+
+from .config import PgConfig
+
+LOGGER = logging.getLogger(__name__)
+
+_POOL: Optional[ThreadedConnectionPool] = None
+
+
+def init_pool(pg: PgConfig, *, min_conn: int = 2, max_conn: int = 16) -> None:
+    """Build the global pool once at app startup. Idempotent — calling
+    twice is a no-op (useful for tests that swap pools)."""
+    global _POOL
+    if _POOL is not None:
+        return
+    _POOL = ThreadedConnectionPool(
+        minconn=min_conn,
+        maxconn=max_conn,
+        host=pg.host, port=pg.port, user=pg.user, password=pg.password,
+        dbname=pg.db, sslmode=pg.sslmode,
+        application_name="ussd_gateway_tz",
+        connect_timeout=10,
+    )
+    LOGGER.info("postgres pool ready host=%s db=%s min=%d max=%d",
+                pg.host, pg.db, min_conn, max_conn)
+
+
+def close_pool() -> None:
+    global _POOL
+    if _POOL is not None:
+        _POOL.closeall()
+        _POOL = None
+
+
+@contextmanager
+def _conn():
+    if _POOL is None:
+        raise RuntimeError("db.init_pool() not called")
+    c = _POOL.getconn()
+    try:
+        yield c
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        _POOL.putconn(c)
+
+
+# ---------- queries ---------------------------------------------------
+
+
+@dataclass
+class ShortcodeRow:
+    id: int
+    operator_id: int
+    operator_name: str
+    code: str
+    owner_user_id: int
+    handler_url: str
+    auth_mode: str           # 'none' | 'bearer'
+    bearer_token: Optional[str]
+    timeout_secs: int
+    active: bool             # legacy flag; superseded by `status` since 007
+    status: str              # 'active' | 'maintenance' | 'deactivated'
+    status_message: Optional[str]
+
+
+def resolve_shortcode(operator_name: str, code: str) -> Optional[ShortcodeRow]:
+    """Look up a shortcode by (operator_name, code).
+
+    Returns None ONLY when the shortcode is genuinely not configured for the
+    operator — i.e. there's no row at all. Non-active statuses
+    (`maintenance`, `deactivated`) are returned to the caller so the gateway
+    can render the owner-authored message instead of the generic
+    'Service not configured'.
+    """
+    sql = """
+        SELECT s.id, s.operator_id, o.name AS operator_name,
+               s.code, s.owner_user_id, s.handler_url,
+               s.auth_mode, s.bearer_token, s.timeout_secs,
+               s.active, s.status, s.status_message
+          FROM shortcodes s
+          JOIN operators  o ON o.id = s.operator_id
+         WHERE o.name = %s AND s.code = %s
+         LIMIT 1
+    """
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, (operator_name, code))
+        r = cur.fetchone()
+        if not r:
+            return None
+        return ShortcodeRow(**r)
+
+
+# Default messages when the owner / SA didn't author one.
+DEFAULT_STATUS_MESSAGES: dict[str, str] = {
+    "maintenance": "Service temporarily under maintenance. Please try again later.",
+    "deactivated": "This service is currently unavailable.",
+}
+
+
+def status_message_for(row: "ShortcodeRow") -> str:
+    """Pick the user-facing message for a non-active shortcode."""
+    if row.status_message:
+        return row.status_message
+    return DEFAULT_STATUS_MESSAGES.get(row.status, "Service is unavailable.")
+
+
+@dataclass
+class ActiveSession:
+    session_id: str
+    operator_id: int
+    service_code: str
+    shortcode_id: Optional[int]
+    msisdn: Optional[str]
+    ussd_string: str
+
+
+def get_active_session(session_id: str, operator_id: int) -> Optional[ActiveSession]:
+    """Look up a live session — used on subsequent legs (type=2 for
+    Vodacom/TruRoute) where the wire payload no longer carries the
+    service_code. Returns None when the session is not in cache (the
+    first leg may not have arrived yet, or the cache row was swept)."""
+    sql = """
+        SELECT session_id, operator_id, service_code, shortcode_id,
+               msisdn, ussd_string
+          FROM ussd_active_sessions
+         WHERE session_id = %s AND operator_id = %s
+         LIMIT 1
+    """
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, (session_id, operator_id))
+        r = cur.fetchone()
+        return ActiveSession(**r) if r else None
+
+
+def upsert_active_session(
+    *,
+    session_id: str,
+    operator_id: int,
+    service_code: str,
+    shortcode_id: Optional[int],
+    msisdn: Optional[str],
+    ussd_string: str,
+) -> None:
+    """UPSERT a live session row. Called on every non-terminal leg —
+    initial start (full row) and subsequent inputs (refresh
+    last_seen_at + appended ussd_string). ON CONFLICT we update only
+    the mutable bits; service_code / shortcode_id were nailed down at
+    session-start and shouldn't drift."""
+    sql = """
+        INSERT INTO ussd_active_sessions
+            (session_id, operator_id, service_code, shortcode_id,
+             msisdn, ussd_string, created_at, last_seen_at)
+        VALUES (%s, %s, %s, %s, %s, %s, now(), now())
+        ON CONFLICT (session_id, operator_id) DO UPDATE
+           SET ussd_string  = EXCLUDED.ussd_string,
+               last_seen_at = now()
+    """
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(sql, (session_id, operator_id, service_code,
+                          shortcode_id, msisdn, ussd_string))
+
+
+def expire_active_session(session_id: str, operator_id: int) -> None:
+    """DELETE the live-session row on any terminal event (handler
+    END reply, MNO RELEASE / TIMEOUT / CHARGE-failure). Idempotent —
+    a session that was never inserted (e.g. terminal arrives first)
+    is a no-op."""
+    sql = """
+        DELETE FROM ussd_active_sessions
+         WHERE session_id = %s AND operator_id = %s
+    """
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(sql, (session_id, operator_id))
+
+
+def log_leg(
+    *,
+    operator_id: int,
+    operator_name: str,
+    shortcode_id: Optional[int],
+    service_code: Optional[str],
+    session_id: str,
+    msisdn: Optional[str],
+    ussd_string: Optional[str],
+    direction: str,
+    raw_request_payload: Optional[dict],
+    raw_response_payload: Optional[dict],
+    handler_url: Optional[str],
+    handler_status_code: Optional[int],
+    handler_response_action: Optional[str],
+    handler_response_text: Optional[str],
+    handler_elapsed_ms: Optional[int],
+    error_class: Optional[str] = None,
+    error_detail: Optional[str] = None,
+) -> None:
+    """Best-effort row insert. A DB hiccup must NOT break the MNO
+    response path — we log + swallow so the user still gets their
+    USSD reply. Production retention is a separate concern (Phase 4
+    monthly partitioning + a sweeper)."""
+    sql = """
+        INSERT INTO ussd_session_logs
+            (operator_id, operator_name, shortcode_id, service_code,
+             session_id, msisdn, ussd_string, direction,
+             raw_request_payload, raw_response_payload,
+             handler_url, handler_status_code,
+             handler_response_action, handler_response_text,
+             handler_elapsed_ms, error_class, error_detail)
+        VALUES
+            (%s, %s, %s, %s,
+             %s, %s, %s, %s,
+             %s::jsonb, %s::jsonb,
+             %s, %s,
+             %s, %s,
+             %s, %s, %s)
+    """
+    try:
+        with _conn() as c, c.cursor() as cur:
+            cur.execute(sql, (
+                operator_id, operator_name, shortcode_id, service_code,
+                session_id, msisdn, ussd_string, direction,
+                json.dumps(raw_request_payload) if raw_request_payload else None,
+                json.dumps(raw_response_payload) if raw_response_payload else None,
+                handler_url, handler_status_code,
+                handler_response_action, handler_response_text,
+                handler_elapsed_ms, error_class, error_detail,
+            ))
+    except Exception:
+        # SWALLOW. The MNO already got our reply; this row is a post-
+        # hoc audit record. A persistent failure here = paged alarm,
+        # but does not affect customers.
+        LOGGER.exception(
+            "ussd_session_logs INSERT failed (swallowed) session_id=%s op=%s",
+            session_id, operator_name,
+        )

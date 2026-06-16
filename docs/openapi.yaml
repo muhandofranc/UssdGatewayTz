@@ -1,0 +1,529 @@
+openapi: 3.1.0
+info:
+  title: UssdGatewayTz — MNO ingress
+  version: "0.1.0"
+  description: |
+    The MNO-facing surface of the Tanzania USSD reseller gateway.
+    This spec describes the requests each TZ MNO (Vodacom, Airtel,
+    Tigo / Yas, Halotel) pushes into the gateway — useful for:
+
+    * **Simulating MNO traffic** during integration testing
+      (Swagger UI's *Try it out* posts directly against the live
+      gateway).
+    * **Reference** for ops debugging a wire-format mismatch.
+
+    NOT the partner-facing API — see `docs/partner-integration.md`
+    for the unified JSON contract the gateway POSTs to your handler.
+
+    ## Authentication
+    The MNO aggregators reach us over a private VPN tunnel; no
+    bearer token / signature is required on the MNO-facing paths.
+    Halotel additionally checks a SOAP user/pass pair INSIDE the
+    body (per its spec).
+
+    ## Response shapes per MNO
+    * Vodacom — `text/xml` (`<ussd><type>2|3</type><msg>...</msg></ussd>`)
+    * Airtel / Tigo — `text/plain` (`CON ...` / `END ...`)
+    * Halotel — `text/xml` (SOAP `<ussdresponse><errorCode>0|1</errorCode></ussdresponse>`)
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local dev
+  - url: https://ussd-gateway.example.com
+    description: Production (replace before publishing)
+
+tags:
+  - name: Health
+    description: Operational probes — no MNO traffic, used by orchestrator
+  - name: Vodacom
+    description: TruRoute XML. POST `text/xml` body or equivalent GET query params.
+  - name: Airtel
+    description: GET-only. 3 params (`input` / `sessionid` / `msisdn`). Per-partner URL pattern `/ussd/{partner}air/`.
+  - name: Tigo
+    description: GET-only. Two concurrent param schemes (A `MSISDN`/`Session_id`/... vs B `input`/`sessionid`/`SHORT_CODE`). Per-partner URL pattern `/ussd/{partner}tigo/`.
+  - name: Halotel
+    description: Bidirectional SOAP. POST `<InsertMO>` envelope; we ACK SOAP `errorCode=0` synchronously then push the menu back on a separate outbound POST to the Halotel USSDGW.
+  - name: PartnerSlug
+    description: Wildcard router used by Airtel / Tigo's per-partner URL pattern.
+
+paths:
+
+  # ---------- Health ----------
+
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Liveness probe (no DB)
+      responses:
+        "200":
+          description: Process is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+              example: { ok: true }
+
+  /readyz:
+    get:
+      tags: [Health]
+      summary: Readiness probe (Phase 4 will add a SELECT 1)
+      responses:
+        "200":
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+              example: { ok: true }
+
+  # ---------- Vodacom (TruRoute XML) ----------
+
+  /ussd/vodacom:
+    get:
+      tags: [Vodacom]
+      summary: Vodacom TruRoute — GET shape
+      description: |
+        Equivalent to the POST `text/xml` body via query params.
+        Vodacom uses either; both flow through the same adapter.
+      parameters:
+        - $ref: "#/components/parameters/VodaMsisdn"
+        - $ref: "#/components/parameters/VodaSessionId"
+        - $ref: "#/components/parameters/VodaType"
+        - $ref: "#/components/parameters/VodaMsg"
+      responses:
+        "200": { $ref: "#/components/responses/VodacomXmlReply" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+    post:
+      tags: [Vodacom]
+      summary: Vodacom TruRoute — POST XML
+      description: |
+        Canonical TruRoute USSD XML interface (TruTeq Wireless v1.3,
+        2010). `type` is one of:
+
+        | wire | name      | meaning                            |
+        |-----:|-----------|------------------------------------|
+        | `1`  | REQUEST   | first leg; `msg` = dialed code     |
+        | `2`  | RESPONSE  | subsequent leg; `msg` = user input |
+        | `3`  | RELEASE   | user cancelled (no handler call)   |
+        | `4`  | TIMEOUT   | MNO closed session                 |
+        | `10` | CHARGE    | premium-rate failure               |
+      requestBody:
+        required: true
+        content:
+          text/xml:
+            schema: { $ref: "#/components/schemas/VodacomTruRouteUssd" }
+            examples:
+              type1-start:
+                summary: Type 1 — first leg (REQUEST)
+                value: |
+                  <ussd>
+                    <msisdn>255712345678</msisdn>
+                    <sessionid>VODA-DEMO-001</sessionid>
+                    <type>1</type>
+                    <msg>*123#</msg>
+                  </ussd>
+              type2-input:
+                summary: Type 2 — user input (RESPONSE)
+                value: |
+                  <ussd>
+                    <msisdn>255712345678</msisdn>
+                    <sessionid>VODA-DEMO-001</sessionid>
+                    <type>2</type>
+                    <msg>1</msg>
+                  </ussd>
+              type3-cancel:
+                summary: Type 3 — user cancelled (RELEASE)
+                value: |
+                  <ussd>
+                    <msisdn>255712345678</msisdn>
+                    <sessionid>VODA-DEMO-001</sessionid>
+                    <type>3</type>
+                    <msg></msg>
+                  </ussd>
+      responses:
+        "200": { $ref: "#/components/responses/VodacomXmlReply" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  # ---------- Airtel (canonical entry) ----------
+
+  /ussd/airtel:
+    get:
+      tags: [Airtel]
+      summary: Airtel canonical entry (testing only)
+      description: |
+        Live Airtel traffic actually arrives at per-partner URLs like
+        `/ussd/glpair/`. This canonical entry exists for direct
+        curl / Swagger testing — same parameter set.
+
+        Lifecycle detection: no first-leg flag on the wire, so the
+        gateway uses session-cache presence — first time we see the
+        `sessionid` = START; subsequent = INPUT.
+      parameters:
+        - $ref: "#/components/parameters/AirtelInput"
+        - $ref: "#/components/parameters/AirtelSessionId"
+        - $ref: "#/components/parameters/AirtelMsisdn"
+      responses:
+        "200": { $ref: "#/components/responses/PlainTextReply" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+    post:
+      tags: [Airtel]
+      summary: Airtel POST equivalent (accepted but Airtel uses GET in production)
+      parameters:
+        - $ref: "#/components/parameters/AirtelInput"
+        - $ref: "#/components/parameters/AirtelSessionId"
+        - $ref: "#/components/parameters/AirtelMsisdn"
+      responses:
+        "200": { $ref: "#/components/responses/PlainTextReply" }
+
+  # ---------- Tigo (canonical entry) ----------
+
+  /ussd/tigo:
+    get:
+      tags: [Tigo]
+      summary: Tigo canonical entry (testing only)
+      description: |
+        Live Tigo traffic arrives at per-partner URLs like
+        `/ussd/glptigo/`, `/ussd/zolatigo/`, `/ussd/kopagastigo/`,
+        `/ussd/tz411tigo/`. Two parameter schemes are in concurrent
+        production use — both flow through this adapter:
+
+        * **Scheme A** (glptigo / zolatigo): `MSISDN` / `Session_id`
+          / `NEW_REQUEST` / `Ussd_string` / `Service_cod`.
+        * **Scheme B** (kopagastigo / tz411tigo): `input` /
+          `sessionid` / `msisdn` / `IMSI` / `newrequest` /
+          `SHORT_CODE`.
+
+        The gateway sniffs which scheme is present and parses both.
+      parameters:
+        - $ref: "#/components/parameters/TigoMsisdnA"
+        - $ref: "#/components/parameters/TigoSessionIdA"
+        - $ref: "#/components/parameters/TigoNewRequestA"
+        - $ref: "#/components/parameters/TigoUssdStringA"
+        - $ref: "#/components/parameters/TigoServiceCodA"
+      responses:
+        "200": { $ref: "#/components/responses/PlainTextReply" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+    post:
+      tags: [Tigo]
+      summary: Tigo POST equivalent (Tigo uses GET in production)
+      responses:
+        "200": { $ref: "#/components/responses/PlainTextReply" }
+
+  # ---------- Halotel (SOAP) ----------
+
+  /ussd/halotel:
+    post:
+      tags: [Halotel]
+      summary: Halotel SOAP InsertMO
+      description: |
+        Halotel's USSDGW POSTs a SOAP envelope here. We synchronously
+        ACK with `<ussdresponse><errorCode>0</errorCode></ussdresponse>`
+        regardless of handler outcome; the menu/result is pushed back
+        OUT-of-band to Halotel's USSDGW on a separate HTTP call.
+
+        `requestType` mapping (inbound):
+
+        | wire | meaning                              |
+        |-----:|--------------------------------------|
+        | 100  | first USSD request (msg = dialed)    |
+        | 101  | user input / menu selection          |
+        | 102  | user cancelled                       |
+        | 103  | display ack (menu reached handset)   |
+        | 104  | transaction error, must cancel       |
+
+        `transactionid` (NOT `sessionid`) is the stable cross-leg
+        correlation key — it starts with `W` and reuses across legs.
+        `user`/`pass` inside the body are checked against env
+        `HALOTEL_INBOUND_USER` / `HALOTEL_INBOUND_PASS`; mismatch =
+        SOAP `errorCode=1` reply.
+      requestBody:
+        required: true
+        content:
+          text/xml:
+            schema: { type: string }
+            examples:
+              type100-start:
+                summary: Type 100 — first request
+                value: |
+                  <?xml version="1.0" encoding="utf-8"?>
+                  <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+                    <soap:Body>
+                      <InsertMO xmlns="http://tempuri.org/">
+                        <user>crdb</user>
+                        <pass>crdb#123</pass>
+                        <msisdn>255629099842</msisdn>
+                        <msg>*123#</msg>
+                        <sessionid>null</sessionid>
+                        <transactionid>W1-2-DEMO-100</transactionid>
+                        <requestType>100</requestType>
+                        <ussdgw_id>1</ussdgw_id>
+                      </InsertMO>
+                    </soap:Body>
+                  </soap:Envelope>
+              type101-input:
+                summary: Type 101 — user picked option "1"
+                value: |
+                  <?xml version="1.0" encoding="utf-8"?>
+                  <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+                    <soap:Body>
+                      <InsertMO xmlns="http://tempuri.org/">
+                        <user>crdb</user>
+                        <pass>crdb#123</pass>
+                        <msisdn>null</msisdn>
+                        <msg>1</msg>
+                        <sessionid>null</sessionid>
+                        <transactionid>W1-2-DEMO-100</transactionid>
+                        <requestType>101</requestType>
+                        <ussdgw_id>1</ussdgw_id>
+                      </InsertMO>
+                    </soap:Body>
+                  </soap:Envelope>
+              type102-cancel:
+                summary: Type 102 — user cancelled
+                value: |
+                  <?xml version="1.0" encoding="utf-8"?>
+                  <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+                    <soap:Body>
+                      <InsertMO xmlns="http://tempuri.org/">
+                        <user>crdb</user>
+                        <pass>crdb#123</pass>
+                        <msisdn>255629099842</msisdn>
+                        <msg></msg>
+                        <sessionid>null</sessionid>
+                        <transactionid>W1-2-DEMO-100</transactionid>
+                        <requestType>102</requestType>
+                        <ussdgw_id>1</ussdgw_id>
+                      </InsertMO>
+                    </soap:Body>
+                  </soap:Envelope>
+      responses:
+        "200":
+          description: SOAP ack envelope.
+          content:
+            text/xml:
+              schema: { type: string }
+              examples:
+                ok:
+                  summary: errorCode=0 (accepted)
+                  value: |
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+                      <soap:Body>
+                        <ussdresponse><errorCode>0</errorCode></ussdresponse>
+                      </soap:Body>
+                    </soap:Envelope>
+                auth:
+                  summary: errorCode=1 (bad user/pass)
+                  value: |
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+                      <soap:Body>
+                        <ussdresponse><errorCode>1</errorCode></ussdresponse>
+                      </soap:Body>
+                    </soap:Envelope>
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  # ---------- Per-partner wildcard (Airtel + Tigo live URLs) ----------
+
+  /ussd/{partner_slug}/:
+    get:
+      tags: [PartnerSlug]
+      summary: Per-partner URL (with trailing slash; Airtel/Tigo live shape)
+      description: |
+        Tigo's aggregator pushes to `/ussd/glptigo/`, `/ussd/zolatigo/`,
+        etc. Airtel pushes to `/ussd/glpair/`. The gateway dispatches
+        by slug suffix:
+
+        | slug suffix | adapter |
+        |-------------|---------|
+        | `*tigo`     | Tigo    |
+        | `*air`      | Airtel  |
+
+        Use the matching parameter set per the adapter (Tigo Scheme A
+        or B, or Airtel's `input`/`sessionid`/`msisdn`).
+      parameters:
+        - in: path
+          name: partner_slug
+          required: true
+          schema: { type: string }
+          examples:
+            glptigo: { value: glptigo, summary: Tigo GLP partner }
+            zolatigo: { value: zolatigo, summary: Tigo Zola partner }
+            glpair: { value: glpair, summary: Airtel GLP partner }
+      responses:
+        "200": { $ref: "#/components/responses/PlainTextReply" }
+        "404":
+          description: slug doesn't match a known suffix.
+    post:
+      tags: [PartnerSlug]
+      summary: Per-partner URL — POST variant
+      parameters:
+        - in: path
+          name: partner_slug
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/PlainTextReply" }
+
+  /ussd/{partner_slug}:
+    get:
+      tags: [PartnerSlug]
+      summary: Per-partner URL (no trailing slash; same dispatch)
+      parameters:
+        - in: path
+          name: partner_slug
+          required: true
+          schema: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/PlainTextReply" }
+        "404": { description: slug doesn't match a known suffix. }
+
+components:
+
+  parameters:
+
+    # ----- Vodacom -----
+    VodaMsisdn:
+      in: query
+      name: msisdn
+      required: true
+      schema: { type: string, example: "255712345678" }
+      description: International MSISDN, no leading `+`.
+    VodaSessionId:
+      in: query
+      name: sessionid
+      required: true
+      schema: { type: string, example: "VODA-DEMO-001" }
+    VodaType:
+      in: query
+      name: type
+      required: true
+      schema:
+        type: string
+        enum: ["1", "2", "3", "4", "10"]
+        example: "1"
+      description: |
+        TruRoute lifecycle: 1=REQUEST · 2=RESPONSE · 3=RELEASE · 4=TIMEOUT · 10=CHARGE.
+    VodaMsg:
+      in: query
+      name: msg
+      required: false
+      schema: { type: string, example: "*123#" }
+      description: |
+        On type=1 carries the dialed code (e.g. `*123#`). On type=2
+        carries the user's input. On 3/4/10 typically empty.
+
+    # ----- Airtel -----
+    AirtelInput:
+      in: query
+      name: input
+      required: true
+      schema: { type: string, example: "147*03" }
+      description: |
+        Dialed code (without `*` / `#`) on the first leg; user-typed
+        input on subsequent legs.
+    AirtelSessionId:
+      in: query
+      name: sessionid
+      required: true
+      schema: { type: string, example: "AIR-DEMO-001" }
+    AirtelMsisdn:
+      in: query
+      name: msisdn
+      required: true
+      schema: { type: string, example: "255780995191" }
+
+    # ----- Tigo (Scheme A — glptigo / zolatigo) -----
+    TigoMsisdnA:
+      in: query
+      name: MSISDN
+      required: true
+      schema: { type: string, example: "255710223275" }
+    TigoSessionIdA:
+      in: query
+      name: Session_id
+      required: true
+      schema: { type: string, example: "TIGO-A-DEMO-001" }
+    TigoNewRequestA:
+      in: query
+      name: NEW_REQUEST
+      required: true
+      schema:
+        type: string
+        enum: ["1", "0"]
+        example: "1"
+      description: "`1` = first leg (Ussd_string is the dialed code); `0` = subsequent leg."
+    TigoUssdStringA:
+      in: query
+      name: Ussd_string
+      required: true
+      schema: { type: string, example: "*148*43" }
+      description: On NEW_REQUEST=1, the dialed code. On NEW_REQUEST=0, the user input.
+    TigoServiceCodA:
+      in: query
+      name: Service_cod
+      required: false
+      schema: { type: string, example: "191" }
+      description: Tigo-internal partner id. Sent only on subsequent legs.
+
+  responses:
+
+    VodacomXmlReply:
+      description: Vodacom TruRoute XML response.
+      content:
+        text/xml:
+          schema:
+            type: string
+          examples:
+            con-menu:
+              summary: type=2 (RESPONSE) — keep session open
+              value: |
+                <ussd><type>2</type><msg>Choose option:
+                1. Foo
+                2. Bar</msg></ussd>
+            end-final:
+              summary: type=3 (RELEASE) — close session
+              value: |
+                <ussd><type>3</type><msg>Goodbye</msg></ussd>
+
+    PlainTextReply:
+      description: Plain text USSD reply.
+      content:
+        text/plain:
+          schema:
+            type: string
+          examples:
+            con:
+              summary: CON — keep session open
+              value: "CON Choose option:\n1. Foo\n2. Bar"
+            end:
+              summary: END — close session
+              value: "END Goodbye"
+
+    BadRequest:
+      description: Malformed request (missing required field, bad XML, unknown type, etc.)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail: { type: string }
+
+  schemas:
+
+    VodacomTruRouteUssd:
+      type: object
+      description: |
+        TruRoute USSD XML envelope. Sent as `text/xml` body OR
+        equivalent GET query params.
+      properties:
+        msisdn:        { type: string, example: "255712345678" }
+        sessionid:     { type: string, example: "VODA-DEMO-001" }
+        type:
+          type: string
+          enum: ["1", "2", "3", "4", "10"]
+          example: "1"
+        msg:           { type: string, example: "*123#" }
+      required: [msisdn, sessionid, type]

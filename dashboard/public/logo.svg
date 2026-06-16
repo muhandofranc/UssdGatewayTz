@@ -1,0 +1,28 @@
+<!--
+  Onfon Media "O" emblem — concentric red/black ovals matching the
+  attached brand mark. Rendered at 28×28 in the sidebar header (and
+  scales cleanly to favicons / large headers). White background so
+  the strokes read at any size; round container to fit the sidebar
+  chip style.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+  <!-- subtle white card so the emblem sits cleanly on the red topbar
+       too — without it the black strokes blend in. -->
+  <rect width="64" height="64" rx="10" fill="#ffffff"/>
+
+  <!-- outermost black oval ring (the asymmetric black halo on the
+       attached logo) -->
+  <ellipse cx="32" cy="32" rx="22" ry="28" fill="none"
+           stroke="#111111" stroke-width="3"/>
+
+  <!-- red main ring — the dominant brand colour -->
+  <ellipse cx="32" cy="32" rx="17" ry="22.5" fill="none"
+           stroke="#E62524" stroke-width="6"/>
+
+  <!-- inner black hairline matching the logo's nested rings -->
+  <ellipse cx="32" cy="32" rx="11" ry="15" fill="none"
+           stroke="#111111" stroke-width="1.5"/>
+
+  <!-- red core "0" -->
+  <ellipse cx="32" cy="32" rx="6" ry="9" fill="#E62524"/>
+</svg>

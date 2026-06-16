@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Class-based dark mode (see tailwind.config.ts). The .dark class is
+ * set on <html> by the no-flash script in app/layout.tsx before first
+ * paint, then flipped by ThemeToggle. `color-scheme` tells the browser
+ * to render native form controls / scrollbars in the matching scheme. */
+:root      { color-scheme: light; }
+:root.dark { color-scheme: dark; }
+
+body {
+  /* Light mode: very-faint warm grey instead of stark white so pages
+   * don't read as a blank document. Dark mode unchanged. Body bg uses
+   * raw CSS because Tailwind's @apply doesn't pick up arbitrary-value
+   * utilities (`bg-[#FAFAFB]`) reliably across builds. */
+  background-color: #FAFAFB;
+  @apply text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+}
+
+/* Wordmark gradient — same hues as the brand-gradient utility but
+ * clipped to text. Used for the "UssdGatewayTz" sidebar title. */
+.brand-text {
+  background: linear-gradient(90deg, #E91E63 0%, #F7941D 25%, #1E88E5 70%, #8E24AA 100%);
+  -webkit-background-clip: text;
+          background-clip: text;
+  color: transparent;
+}
+
+/* Subtle brand-tinted hover for nav items in light mode. */
+.brand-nav-hover {
+  @apply hover:bg-onfon-red/10 dark:hover:bg-slate-800;
+}
