@@ -61,6 +61,10 @@ export default async function AuthedLayout({
   ) {
     items.push({ href: "/users", label: "Portal users", matchPrefix: "/users" });
   }
+  // Audit log — super_admin only (db/011).
+  if (hasPerm(session, Perms.AUDIT_VIEW)) {
+    items.push({ href: "/audit", label: "Audit log", matchPrefix: "/audit" });
+  }
 
   return (
     <div className="min-h-screen md:grid md:grid-cols-[14rem_1fr]">

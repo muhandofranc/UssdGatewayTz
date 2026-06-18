@@ -33,6 +33,7 @@ export const Perms = {
   PORTAL_USERS_VIEW:   "portal_users.view",
   PORTAL_USERS_MANAGE: "portal_users.manage",
   VIEWERS_MANAGE_OWN:  "viewers.manage_own",
+  AUDIT_VIEW:          "audit.view",
 } as const;
 
 export type PermKey = (typeof Perms)[keyof typeof Perms];
@@ -90,6 +91,10 @@ export function requiredPermFor(pathname: string): PermKey[] | null {
       Perms.PORTAL_USERS_MANAGE,
       Perms.VIEWERS_MANAGE_OWN,
     ];
+  }
+  // Audit log — super_admin only (granted via db/011).
+  if (pathname.startsWith("/audit") || pathname.startsWith("/api/audit")) {
+    return [Perms.AUDIT_VIEW];
   }
   // Anything else under (authed)/ → require at minimum a session
   // (any perm). Returning empty array means "must be logged in but

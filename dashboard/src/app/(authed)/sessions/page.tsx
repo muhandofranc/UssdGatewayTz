@@ -218,11 +218,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
 
       <p className="text-[11px] text-slate-500">
         Each row is one MNO-issued <span className="font-mono">session_id</span>. The
-        {" "}<strong>Sessions</strong> column is the MNO-billable count for that row =
-        {" "}<span className="font-mono">CEIL(duration / window)</span> (any spill into the
-        next window = a whole new session). Vodacom 20s, Airtel/Tigo 30s — windows are
-        editable by super_admin on <Link href="/operators" className="underline">operators</Link>.
-        Click any row (or the ▸ chevron) to expand its per-leg breakdown inline.
+        {" "}<strong>Sessions</strong> column is the MNO-billable count.
       </p>
     </div>
   );

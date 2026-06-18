@@ -9,11 +9,12 @@ import { NextResponse } from "next/server";
 import { createReadStream, statSync } from "node:fs";
 import { Readable } from "node:stream";
 import { getSession } from "@/lib/auth";
+import { audit, clientIp } from "@/lib/audit";
 import { getExportForUser } from "@/lib/exports";
 
 interface Ctx { params: Promise<{ id: string }>; }
 
-export async function GET(_req: Request, ctx: Ctx) {
+export async function GET(req: Request, ctx: Ctx) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
@@ -24,7 +25,19 @@ export async function GET(_req: Request, ctx: Ctx) {
   }
 
   const row = await getExportForUser(id, Number(session.sub));
-  if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
+  if (!row) {
+    // Treat as denied (someone tried to download an export that
+    // either doesn't exist OR belongs to another user — same 404
+    // either way; the audit trail keeps both visible).
+    await audit({
+      actor: session.email, action: "export.download",
+      target: String(id), outcome: "denied",
+      ip: clientIp(req.headers),
+      userAgent: req.headers.get("user-agent"),
+      detail: { reason: "not found or not owned" },
+    });
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
   if (row.status !== "ready" || !row.file_path) {
     return NextResponse.json(
       { error: `export not ready (status=${row.status})` },
@@ -37,6 +50,14 @@ export async function GET(_req: Request, ctx: Ctx) {
   catch {
     return NextResponse.json({ error: "file missing on disk" }, { status: 410 });
   }
+
+  await audit({
+    actor: session.email, action: "export.download",
+    target: String(id), outcome: "success",
+    ip: clientIp(req.headers),
+    userAgent: req.headers.get("user-agent"),
+    detail: { id, granularity: row.granularity, size_bytes: size },
+  });
 
   // Stream directly off disk so a multi-GB CSV doesn't buffer in
   // the Node process. The readable is adapted to the Web Streams

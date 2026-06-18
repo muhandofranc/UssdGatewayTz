@@ -66,12 +66,7 @@ export default async function OperatorsPage() {
       </div>
 
       <p className="text-xs text-slate-500">
-        Billable window = the per-MNO USSD billing increment (Vodacom 20s,
-        Airtel/Tigo 30s). Billable units per session ={" "}
-        <span className="font-mono">GREATEST(1, CEIL(duration / window))</span>:
-        any spill into the next window = a whole new window, and even a
-        0-duration session bills 1 unit. Empty / per-leg means the MNO
-        charges flat-per-session and we skip the calculation.
+        Billable window = the per-MNO USSD billing increment.
       </p>
     </div>
   );

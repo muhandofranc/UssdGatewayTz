@@ -8,7 +8,9 @@
  */
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { getSession } from "@/lib/auth";
+import { audit, clientIp } from "@/lib/audit";
 import { enqueueExport, type Granularity } from "@/lib/exports";
 
 function strField(fd: FormData, k: string): string {
@@ -48,10 +50,24 @@ export async function actionCreateExport(fd: FormData) {
     requested_by_role:  session.role,
   };
 
-  await enqueueExport({
+  const id = await enqueueExport({
     userId: Number(session.sub),
     granularity,
     filters,
+  });
+
+  const h = await headers();
+  await audit({
+    actor: session.email, action: "export.create",
+    target: String(id), outcome: "success",
+    ip: clientIp(h), userAgent: h.get("user-agent"),
+    detail: {
+      id, granularity,
+      from: filters.from, to: filters.to,
+      operators: filters.operators,
+      shortcode_ids: filters.shortcodeIds,
+      msisdn: filters.msisdn ? "redacted" : null,
+    },
   });
 
   revalidatePath("/exports");
