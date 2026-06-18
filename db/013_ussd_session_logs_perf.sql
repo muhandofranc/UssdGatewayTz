@@ -97,6 +97,14 @@ ANALYZE ussd_session_logs;
 -- that the cron has lapsed; ops should re-run this and then move the
 -- DEFAULT rows into the correct monthly partitions with a manual
 -- INSERT/DELETE.
+-- DROP first — `CREATE OR REPLACE FUNCTION` cannot change a parameter
+-- NAME, and db/014 redefines this signature as the same-typed-but-
+-- differently-named `days_to_keep` / weekly+daily variants. Without
+-- this drop, re-running 013 after 014 fails with "cannot change name
+-- of input parameter" and the entire migration chain halts before 015.
+DROP FUNCTION IF EXISTS ensure_session_log_partitions(int);
+DROP FUNCTION IF EXISTS drop_old_session_log_partitions(int);
+
 CREATE OR REPLACE FUNCTION ensure_session_log_partitions(months_ahead int)
 RETURNS int
 LANGUAGE plpgsql
@@ -167,6 +175,26 @@ BEGIN
 END;
 $$;
 
--- Extend the partition runway 6 months ahead right now. Safe to call
--- on every migration apply — idempotent.
-SELECT ensure_session_log_partitions(6);
+-- Extend the partition runway 6 months ahead — but ONLY when no
+-- weekly/daily partitions exist yet. Post-db/014 the runway is
+-- managed by ensure_session_log_partitions_weekly/_daily; calling
+-- the monthly variant after 014 has flipped over would fail with
+-- "would overlap partition" because the future ranges are already
+-- occupied by weekly partitions.
+--
+-- This block is the partner to the equivalent guard in db/004 step 3.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_inherits i
+          JOIN pg_class c ON c.oid = i.inhrelid
+          JOIN pg_class p ON p.oid = i.inhparent
+         WHERE p.relname = 'ussd_session_logs'
+           AND (c.relname LIKE 'ussd_session_logs_w_%'
+                OR c.relname LIKE 'ussd_session_logs_d_%')
+    ) THEN
+        RAISE NOTICE 'weekly/daily partitions present — skipping monthly runway extend (db/014+ owns the lifecycle)';
+    ELSE
+        PERFORM ensure_session_log_partitions(6);
+    END IF;
+END $$;
