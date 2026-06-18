@@ -144,7 +144,7 @@ export default async function ReportsPage({ searchParams }: PageProps) {
   const sp = await searchParams;
   const filters = parseFilters(sp);
   const page = asPositiveInt(sp.page, 1);
-  const pageSize = asPositiveInt(sp.page_size, 25, 100);
+  const pageSize = asPositiveInt(sp.page_size, 10, 100);
 
   const [pageResult, summary, shortcodeOpts] = await Promise.all([
     loadReportPage(filters, session.shortcodeIds, page, pageSize),
@@ -230,7 +230,7 @@ export default async function ReportsPage({ searchParams }: PageProps) {
               <th className="px-2 py-1.5 text-xs font-medium">Status</th>
               <th className="px-2 py-1.5 text-xs font-medium">USSD trail</th>
               <th className="px-2 py-1.5 text-xs font-medium">Reply</th>
-              <th className="px-2 py-1.5 text-xs font-medium text-right">ms</th>
+              <th className="px-2 py-1.5 text-xs font-medium text-right" title="Gateway → handler HTTP round-trip in milliseconds (does not include MNO ↔ gateway legs)">Handler latency</th>
             </tr>
           </thead>
           <tbody>

@@ -92,7 +92,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
   const sp = await searchParams;
   const filters = parseFilters(sp);
   const page = asPositiveInt(sp.page, 1);
-  const pageSize = asPositiveInt(sp.page_size, 25, 100);
+  const pageSize = asPositiveInt(sp.page_size, 10, 100);
 
   const [pageResult, summary, shortcodeOpts] = await Promise.all([
     loadSessionPage(filters, session.shortcodeIds, page, pageSize),
