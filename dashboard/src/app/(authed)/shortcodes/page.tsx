@@ -1,19 +1,80 @@
 /**
- * /shortcodes — list with inline activate/deactivate + link to edit
- * and new. super_admin gets the full write surface; auditor sees the
- * same listing with all write affordances hidden (read-only).
- * Middleware + the action layer both gate writes on SHORTCODES_MANAGE.
+ * /shortcodes — list + filter form.
+ *
+ * super_admin gets the full write surface; auditor sees the same
+ * listing with all write affordances hidden (read-only). Middleware
+ * + the action layer both gate writes on SHORTCODES_MANAGE.
+ *
+ * Filters (querystring → searchParams) — same GET-form pattern as
+ * /audit + /summary:
+ *   operator_id  (multi)  — operators.id
+ *   status                — active | maintenance | deactivated
+ *   auth_mode             — none | bearer
+ *   owner_user_id         — portal_users.id (the dropdown is only
+ *                            useful for super_admin/auditor; client/
+ *                            client_viewer already have a narrowed
+ *                            view via the data-level allowlist)
+ *   q                     — free-text on code / label / handler_url
  */
 import Link from "next/link";
 import { getSession, hasPerm } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
-import { listShortcodes } from "@/lib/shortcodes";
+import {
+  listOperators, listShortcodes,
+  type ShortcodeListFilters, type ShortcodeStatus,
+} from "@/lib/shortcodes";
+import { listShortcodeOwners } from "@/lib/summary";
 import { actionSetShortcodeActive } from "./actions";
 
-export default async function ShortcodesPage() {
+type SearchParams = {
+  operator_id?: string | string[];
+  status?: string;
+  auth_mode?: string;
+  owner_user_id?: string;
+  q?: string;
+};
+
+function asArray(v: string | string[] | undefined): string[] {
+  if (!v) return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+function asIntArray(v: string | string[] | undefined): number[] {
+  return asArray(v).map((x) => parseInt(x, 10)).filter(Number.isFinite);
+}
+
+const STATUSES: ShortcodeStatus[] = ["active", "maintenance", "deactivated"];
+
+export default async function ShortcodesPage({
+  searchParams,
+}: { searchParams: Promise<SearchParams> }) {
   const session = await getSession();
   const canManage = !!session && hasPerm(session, Perms.SHORTCODES_MANAGE);
-  const rows = await listShortcodes();
+  const sp = await searchParams;
+
+  const operatorIds  = asIntArray(sp.operator_id);
+  const status       = STATUSES.includes(sp.status as ShortcodeStatus)
+                         ? (sp.status as ShortcodeStatus) : undefined;
+  const authMode     = sp.auth_mode === "none" || sp.auth_mode === "bearer"
+                         ? sp.auth_mode : undefined;
+  const ownerUserId  = sp.owner_user_id ? parseInt(sp.owner_user_id, 10) : undefined;
+  const search       = sp.q?.trim() || undefined;
+
+  const filters: ShortcodeListFilters = {
+    operatorIds:  operatorIds.length ? operatorIds : undefined,
+    status,
+    authMode,
+    ownerUserId:  Number.isFinite(ownerUserId) ? ownerUserId : undefined,
+    search,
+  };
+
+  const [rows, operators, owners] = await Promise.all([
+    listShortcodes(filters),
+    listOperators(),
+    listShortcodeOwners(),
+  ]);
+
+  const anyFilterActive = !!(operatorIds.length || status || authMode || ownerUserId || search);
 
   return (
     <div className="space-y-4">
@@ -29,6 +90,77 @@ export default async function ShortcodesPage() {
         ) : (
           <span className="text-xs text-slate-500 italic">read-only</span>
         )}
+      </div>
+
+      {/* ---- Filter form ---- */}
+      <form method="GET"
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4
+                       grid gap-3 md:grid-cols-6 items-end">
+        <label className="block md:col-span-2">
+          <span className="block text-xs font-medium mb-1">Search (code / label / handler URL)</span>
+          <input name="q" type="text" defaultValue={search ?? ""}
+                 placeholder="substring"
+                 className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-sm" />
+        </label>
+
+        <label className="block">
+          <span className="block text-xs font-medium mb-1">Operator</span>
+          <select name="operator_id" multiple
+                  defaultValue={operatorIds.map(String)}
+                  className="w-full h-20 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1 text-xs font-mono">
+            {operators.map((o) => (
+              <option key={o.id} value={o.id}>{o.display_name}</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="block text-xs font-medium mb-1">Status</span>
+          <select name="status" defaultValue={status ?? ""}
+                  className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-sm">
+            <option value="">any</option>
+            <option value="active">active</option>
+            <option value="maintenance">maintenance</option>
+            <option value="deactivated">deactivated</option>
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="block text-xs font-medium mb-1">Auth mode</span>
+          <select name="auth_mode" defaultValue={authMode ?? ""}
+                  className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-sm">
+            <option value="">any</option>
+            <option value="none">none</option>
+            <option value="bearer">bearer</option>
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="block text-xs font-medium mb-1">Owner</span>
+          <select name="owner_user_id" defaultValue={ownerUserId ? String(ownerUserId) : ""}
+                  className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-sm">
+            <option value="">any</option>
+            {owners.map((u) => (
+              <option key={u.id} value={u.id}>{u.name} ({u.shortcode_count})</option>
+            ))}
+          </select>
+        </label>
+
+        <div className="flex gap-2 md:col-span-6 justify-end">
+          <Link href="/shortcodes"
+                className="rounded-md border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-sm">
+            Reset
+          </Link>
+          <button type="submit"
+                  className="rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 px-3 py-1.5 text-sm font-medium">
+            Apply
+          </button>
+        </div>
+      </form>
+
+      <div className="text-xs text-slate-500">
+        {rows.length} match{rows.length === 1 ? "" : "es"}
+        {anyFilterActive ? null : " (no filter applied)"}
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
@@ -95,9 +227,11 @@ export default async function ShortcodesPage() {
             ))}
             {rows.length === 0 ? (
               <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={canManage ? 9 : 8}>
-                {canManage
-                  ? <>No shortcodes yet. Click <Link href="/shortcodes/new" className="underline">+ New shortcode</Link> to add one.</>
-                  : "No shortcodes yet."}
+                {anyFilterActive
+                  ? "No shortcodes match the current filters."
+                  : canManage
+                    ? <>No shortcodes yet. Click <Link href="/shortcodes/new" className="underline">+ New shortcode</Link> to add one.</>
+                    : "No shortcodes yet."}
               </td></tr>
             ) : null}
           </tbody>

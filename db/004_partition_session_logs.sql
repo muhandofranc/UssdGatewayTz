@@ -68,31 +68,43 @@ BEGIN
 END
 $$;
 
--- 3. monthly partitions — 12 back, current, 3 forward. Computed in
---    one shot via generate_series so re-running with NEW months
---    (a year later) just adds the missing ones.
+-- 3. monthly partitions — 12 back, current, 3 forward. Skip the
+--    monthly seed once db/014+ has converted future ranges to
+--    weekly/daily: re-creating any monthly whose range is now
+--    covered by a weekly partition would fail with "would overlap
+--    partition" (IF NOT EXISTS only guards on NAME, not date range).
+--    The _default catch-all is still ensured at the bottom either
+--    way so an INSERT with an unmapped ts always lands somewhere.
 DO $$
 DECLARE
     cur_month date := date_trunc('month', now())::date;
-    m          date;
+    m         date;
 BEGIN
-    FOR m IN
-        SELECT (cur_month - (12 * INTERVAL '1 month'))::date
-             + (n * INTERVAL '1 month')
-          FROM generate_series(0, 15) n
-    LOOP
-        EXECUTE format(
-            'CREATE TABLE IF NOT EXISTS ussd_session_logs_%s
-               PARTITION OF ussd_session_logs
-               FOR VALUES FROM (%L) TO (%L)',
-            to_char(m, 'YYYY_MM'),
-            m,
-            (m + INTERVAL '1 month')::date
-        );
-    END LOOP;
-    -- catch-all so an INSERT with ts outside the explicit ranges
-    -- still lands somewhere (operator paged + add the missing
-    -- monthly partition retroactively).
+    IF EXISTS (
+        SELECT 1 FROM pg_inherits i
+          JOIN pg_class c ON c.oid = i.inhrelid
+          JOIN pg_class p ON p.oid = i.inhparent
+         WHERE p.relname = 'ussd_session_logs'
+           AND (c.relname LIKE 'ussd_session_logs_w_%'
+                OR c.relname LIKE 'ussd_session_logs_d_%')
+    ) THEN
+        RAISE NOTICE 'weekly/daily partitions present — skipping monthly seed (db/014+ owns the lifecycle)';
+    ELSE
+        FOR m IN
+            SELECT (cur_month - (12 * INTERVAL '1 month'))::date
+                 + (n * INTERVAL '1 month')
+              FROM generate_series(0, 15) n
+        LOOP
+            EXECUTE format(
+                'CREATE TABLE IF NOT EXISTS ussd_session_logs_%s
+                   PARTITION OF ussd_session_logs
+                   FOR VALUES FROM (%L) TO (%L)',
+                to_char(m, 'YYYY_MM'),
+                m,
+                (m + INTERVAL '1 month')::date
+            );
+        END LOOP;
+    END IF;
     EXECUTE 'CREATE TABLE IF NOT EXISTS ussd_session_logs_default
                PARTITION OF ussd_session_logs DEFAULT';
 END

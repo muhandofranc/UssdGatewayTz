@@ -39,7 +39,35 @@ export interface RoleOption {
   label: string;
 }
 
-export async function listUsers(): Promise<UserRow[]> {
+export interface UserListFilters {
+  /** roles.id exact match. */
+  roleId?: number;
+  /** undefined = any. true / false filter narrow. */
+  active?: boolean;
+  /** Free-text ILIKE on email / name / phone. */
+  search?: string;
+}
+
+export async function listUsers(
+  f: UserListFilters = {},
+): Promise<UserRow[]> {
+  const conds: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const params: any[] = [];
+  const next = (v: unknown) => { params.push(v); return `$${params.length}`; };
+
+  if (f.roleId !== undefined && Number.isFinite(f.roleId)) {
+    conds.push(`u.role_id = ${next(f.roleId)}`);
+  }
+  if (f.active === true)  conds.push(`u.active = TRUE`);
+  if (f.active === false) conds.push(`u.active = FALSE`);
+  if (f.search && f.search.trim()) {
+    const q = `%${f.search.trim()}%`;
+    const p = next(q);
+    conds.push(`(u.email ILIKE ${p} OR u.name ILIKE ${p} OR u.phone ILIKE ${p})`);
+  }
+
+  const where = conds.length ? ` WHERE ${conds.join(" AND ")}` : "";
   const r = await query<UserRow>(
     `SELECT u.id, u.email, u.name, u.phone,
             u.role_id, r.key AS role_key, r.label AS role_label,
@@ -53,7 +81,9 @@ export async function listUsers(): Promise<UserRow[]> {
           FROM shortcodes WHERE active = TRUE
          GROUP BY owner_user_id
       ) c ON c.owner_user_id = u.id
+      ${where}
       ORDER BY u.email`,
+    params,
   );
   return r.rows;
 }

@@ -62,8 +62,51 @@ const SHORTCODE_SELECT = `
  LEFT JOIN portal_users sb ON sb.id = s.status_set_by_id
 `;
 
-export async function listShortcodes(): Promise<ShortcodeRow[]> {
-  const r = await query<ShortcodeRow>(SHORTCODE_SELECT + " ORDER BY o.name, s.code");
+export interface ShortcodeListFilters {
+  /** operators.id values; OR'd via ANY(). Empty/undefined = no narrowing. */
+  operatorIds?: number[];
+  /** Exact match on shortcodes.status. */
+  status?: ShortcodeStatus;
+  /** 'none' | 'bearer' exact match. */
+  authMode?: "none" | "bearer";
+  /** portal_users.id exact match — typically only used by callers
+   *  with reports.view_all (the page hides the dropdown otherwise). */
+  ownerUserId?: number;
+  /** Free-text ILIKE on code / label / handler_url. */
+  search?: string;
+}
+
+export async function listShortcodes(
+  f: ShortcodeListFilters = {},
+): Promise<ShortcodeRow[]> {
+  const conds: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const params: any[] = [];
+  const next = (v: unknown) => { params.push(v); return `$${params.length}`; };
+
+  if (f.operatorIds && f.operatorIds.length) {
+    conds.push(`s.operator_id = ANY(${next(f.operatorIds)}::int[])`);
+  }
+  if (f.status) {
+    conds.push(`s.status = ${next(f.status)}`);
+  }
+  if (f.authMode) {
+    conds.push(`s.auth_mode = ${next(f.authMode)}`);
+  }
+  if (f.ownerUserId !== undefined && Number.isFinite(f.ownerUserId)) {
+    conds.push(`s.owner_user_id = ${next(f.ownerUserId)}`);
+  }
+  if (f.search && f.search.trim()) {
+    const q = `%${f.search.trim()}%`;
+    const p = next(q);
+    conds.push(`(s.code ILIKE ${p} OR s.label ILIKE ${p} OR s.handler_url ILIKE ${p})`);
+  }
+
+  const where = conds.length ? ` WHERE ${conds.join(" AND ")}` : "";
+  const r = await query<ShortcodeRow>(
+    SHORTCODE_SELECT + where + " ORDER BY o.name, s.code",
+    params,
+  );
   return r.rows;
 }
 

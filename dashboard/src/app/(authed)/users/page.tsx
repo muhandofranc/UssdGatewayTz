@@ -18,7 +18,10 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession, hasPerm } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
-import { ADMIN_MAX_VIEWERS, listUsers, listViewersForAdmin } from "@/lib/users";
+import {
+  ADMIN_MAX_VIEWERS, listRoles, listUsers, listViewersForAdmin,
+  type UserListFilters,
+} from "@/lib/users";
 import { listShortcodesOwnedBy } from "@/lib/shortcodes";
 import {
   actionAdminCreateViewer, actionAdminSetGrants, actionAdminUpdateViewer,
@@ -26,6 +29,10 @@ import {
 
 type SearchParams = {
   error?: string; saved?: string; created?: string; reset?: string;
+  /** Filter querystring (FullList branch only): role_id, active, q. */
+  role_id?: string;
+  active?: string;        // "1" / "0" / "" (any)
+  q?: string;
 };
 
 export default async function UsersPage({
@@ -47,11 +54,18 @@ export default async function UsersPage({
   // super_admin OR auditor → full platform list (auditor sees no edit
   // affordances). Both use the existing listUsers query.
   if (canManageAll || canViewAll) {
+    const roleIdRaw = sp.role_id ? parseInt(sp.role_id, 10) : undefined;
+    const filters: UserListFilters = {
+      roleId: Number.isFinite(roleIdRaw) ? roleIdRaw : undefined,
+      active: sp.active === "1" ? true : sp.active === "0" ? false : undefined,
+      search: sp.q?.trim() || undefined,
+    };
     return (
       <FullList
         readOnly={!canManageAll}
         flash={flash}
         error={sp.error ?? null}
+        filters={filters}
       />
     );
   }
@@ -77,9 +91,13 @@ export default async function UsersPage({
 // --------------------------------------------------------------------
 
 async function FullList({
-  readOnly, flash, error,
-}: { readOnly: boolean; flash: string | null; error: string | null }) {
-  const rows = await listUsers();
+  readOnly, flash, error, filters,
+}: {
+  readOnly: boolean; flash: string | null; error: string | null;
+  filters: UserListFilters;
+}) {
+  const [rows, roles] = await Promise.all([listUsers(filters), listRoles()]);
+  const anyFilterActive = !!(filters.roleId || filters.active !== undefined || filters.search);
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -92,6 +110,56 @@ async function FullList({
         ) : (
           <span className="text-xs text-slate-500 italic">read-only</span>
         )}
+      </div>
+
+      {/* ---- Filter form (GET → searchParams) ---- */}
+      <form method="GET"
+            className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4
+                       grid gap-3 md:grid-cols-5 items-end">
+        <label className="block md:col-span-2">
+          <span className="block text-xs font-medium mb-1">Search (email / name / phone)</span>
+          <input name="q" type="text" defaultValue={filters.search ?? ""}
+                 placeholder="substring"
+                 className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-sm" />
+        </label>
+
+        <label className="block">
+          <span className="block text-xs font-medium mb-1">Role</span>
+          <select name="role_id" defaultValue={filters.roleId ? String(filters.roleId) : ""}
+                  className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-sm">
+            <option value="">any</option>
+            {roles.map((r) => (
+              <option key={r.id} value={r.id}>{r.label} ({r.key})</option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="block text-xs font-medium mb-1">Active</span>
+          <select name="active"
+                  defaultValue={filters.active === true ? "1" : filters.active === false ? "0" : ""}
+                  className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-sm">
+            <option value="">any</option>
+            <option value="1">active</option>
+            <option value="0">inactive</option>
+          </select>
+        </label>
+
+        <div className="flex gap-2 md:col-span-5 justify-end">
+          <Link href="/users"
+                className="rounded-md border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-sm">
+            Reset
+          </Link>
+          <button type="submit"
+                  className="rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 px-3 py-1.5 text-sm font-medium">
+            Apply
+          </button>
+        </div>
+      </form>
+
+      <div className="text-xs text-slate-500">
+        {rows.length} match{rows.length === 1 ? "" : "es"}
+        {anyFilterActive ? null : " (no filter applied)"}
       </div>
 
       <Flash kind="ok"  msg={flash} />
@@ -136,7 +204,7 @@ async function FullList({
             ))}
             {rows.length === 0 ? (
               <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={readOnly ? 7 : 8}>
-                No users.
+                {anyFilterActive ? "No users match the current filters." : "No users."}
               </td></tr>
             ) : null}
           </tbody>
