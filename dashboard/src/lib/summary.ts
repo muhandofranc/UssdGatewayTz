@@ -209,9 +209,13 @@ export function streamDailySummaryCsv(
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
+        // Columns match the on-screen view — errors omitted by design.
+        // Operators wanting the error column should pull from
+        // /audit or /reports instead. Header names mirror the page
+        // ("Sessions" → unique_session_ids, "Billable units" → session_counts).
         const headers = includeGroup
-          ? ["date", groupHeader, "sessions", "legs", "errors", "billable_units"]
-          : ["date", "sessions", "legs", "errors", "billable_units"];
+          ? ["date", groupHeader, "unique_session_ids", "legs", "session_counts"]
+          : ["date", "unique_session_ids", "legs", "session_counts"];
         controller.enqueue(encoder.encode(headers.join(",") + "\n"));
 
         // Reuse the same loader as the page — already encodes the
@@ -223,8 +227,8 @@ export function streamDailySummaryCsv(
 
         for (const r of rows) {
           const cells = includeGroup
-            ? [r.date, r.group_label ?? "", String(r.sessions), String(r.legs), String(r.errors), String(r.billable_units)]
-            : [r.date, String(r.sessions), String(r.legs), String(r.errors), String(r.billable_units)];
+            ? [r.date, r.group_label ?? "", String(r.sessions), String(r.legs), String(r.billable_units)]
+            : [r.date, String(r.sessions), String(r.legs), String(r.billable_units)];
           controller.enqueue(encoder.encode(cells.map(csvCell).join(",") + "\n"));
         }
 

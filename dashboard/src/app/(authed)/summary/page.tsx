@@ -65,7 +65,9 @@ export default async function SummaryPage({
   const through = dataThroughDate();
   const fromDate = sp.from || defaultFromDate();
   const toDate   = sp.to   || through;
-  const groupBy: GroupBy = sp.group_by ?? "date";
+  // Default per-network breakdown — one row per (date, operator).
+  // Users can switch via the "Group by" dropdown.
+  const groupBy: GroupBy = sp.group_by ?? "date_operator";
   const operatorIds  = asIntArray(sp.operator_id);
   const shortcodeIds = asIntArray(sp.shortcode_id);
   const ownerUserId  = sp.owner_user_id ? parseInt(sp.owner_user_id, 10) : undefined;
@@ -89,10 +91,9 @@ export default async function SummaryPage({
     (acc, r) => ({
       sessions:       acc.sessions + r.sessions,
       legs:           acc.legs + r.legs,
-      errors:         acc.errors + r.errors,
       billable_units: acc.billable_units + r.billable_units,
     }),
-    { sessions: 0, legs: 0, errors: 0, billable_units: 0 },
+    { sessions: 0, legs: 0, billable_units: 0 },
   );
 
   const showGroupCol = groupBy !== "date";
@@ -210,10 +211,9 @@ export default async function SummaryPage({
             <tr>
               <th className="px-2 py-2 text-xs font-medium">Date</th>
               {showGroupCol ? <th className="px-2 py-2 text-xs font-medium">{groupHeader}</th> : null}
-              <th className="px-2 py-2 text-xs font-medium text-right">Sessions</th>
+              <th className="px-2 py-2 text-xs font-medium text-right">Unique SessionIDs</th>
               <th className="px-2 py-2 text-xs font-medium text-right">Legs</th>
-              <th className="px-2 py-2 text-xs font-medium text-right">Errors</th>
-              <th className="px-2 py-2 text-xs font-medium text-right">Billable units</th>
+              <th className="px-2 py-2 text-xs font-medium text-right">Session Counts</th>
             </tr>
           </thead>
           <tbody>
@@ -224,16 +224,11 @@ export default async function SummaryPage({
                 {showGroupCol ? <td className="px-2 py-1.5 text-xs">{r.group_label ?? "—"}</td> : null}
                 <td className="px-2 py-1.5 text-xs text-right tabular-nums">{r.sessions.toLocaleString()}</td>
                 <td className="px-2 py-1.5 text-xs text-right tabular-nums">{r.legs.toLocaleString()}</td>
-                <td className="px-2 py-1.5 text-xs text-right tabular-nums">
-                  {r.errors > 0
-                    ? <span className="text-rose-700 dark:text-rose-300">{r.errors.toLocaleString()}</span>
-                    : r.errors.toLocaleString()}
-                </td>
                 <td className="px-2 py-1.5 text-xs text-right tabular-nums">{r.billable_units.toLocaleString()}</td>
               </tr>
             ))}
             {rows.length === 0 ? (
-              <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={showGroupCol ? 6 : 5}>
+              <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={showGroupCol ? 5 : 4}>
                 No data for the current filters.
               </td></tr>
             ) : null}
@@ -244,7 +239,6 @@ export default async function SummaryPage({
                 <td className="px-2 py-2 text-xs font-semibold" colSpan={showGroupCol ? 2 : 1}>Total</td>
                 <td className="px-2 py-2 text-xs font-semibold text-right tabular-nums">{totals.sessions.toLocaleString()}</td>
                 <td className="px-2 py-2 text-xs font-semibold text-right tabular-nums">{totals.legs.toLocaleString()}</td>
-                <td className="px-2 py-2 text-xs font-semibold text-right tabular-nums">{totals.errors.toLocaleString()}</td>
                 <td className="px-2 py-2 text-xs font-semibold text-right tabular-nums">{totals.billable_units.toLocaleString()}</td>
               </tr>
             </tfoot>
