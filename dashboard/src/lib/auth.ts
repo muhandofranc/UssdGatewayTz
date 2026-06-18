@@ -139,8 +139,13 @@ export async function loadUserClaims(
   const row = r.rows[0];
   if (!row) return null;
 
+  // Unrestricted shortcode access for anyone whose perms include
+  // `reports.view_all` — super_admin (granted via the CROSS JOIN in
+  // db/001) AND auditor (granted explicitly in db/010). Lifting the
+  // check off the hard-coded role key makes future "global read-only"
+  // roles automatically inherit the right scope.
   let shortcodeIds: number[] | null;
-  if (row.role_key === "super_admin") {
+  if (row.perms.includes("reports.view_all")) {
     shortcodeIds = null;
   } else {
     const sc = await query<{ id: number }>(

@@ -27,10 +27,11 @@ export default async function AuthedLayout({
   // Admin sections only for users that carry the matching perm.
   const items: NavItem[] = [
     { href: "/",            label: "Overview" },                                  // exact "/" match
+    { href: "/summary",     label: "Reports Summary",     matchPrefix: "/summary"     },  // pre-aggregated daily rollup
     { href: "/sessions",    label: "Sessions",    matchPrefix: "/sessions"    },  // per-session summary
-    { href: "/reports",     label: "Legs",        matchPrefix: "/reports"     },  // per-HTTP-leg detail
-    { href: "/exports",     label: "Exports",     matchPrefix: "/exports"     },  // queued CSV jobs
-    { href: "/integration", label: "Integration", matchPrefix: "/integration" },  // handler-URL contract docs
+    { href: "/reports",     label: "Session Hops",        matchPrefix: "/reports"     },  // per-HTTP-leg detail
+    { href: "/exports",     label: "Download Exports",     matchPrefix: "/exports"     },  // queued CSV jobs
+    { href: "/integration", label: "Integration Document", matchPrefix: "/integration" },  // handler-URL contract docs
   ];
   // Shortcodes/Operators sidebar: show for super_admin (manage) AND
   // auditor (view-only). Client/Admin sees their slim "My shortcodes"

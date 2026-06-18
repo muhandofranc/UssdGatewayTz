@@ -58,10 +58,13 @@ export function requiredPermFor(pathname: string): PermKey[] | null {
 
   // Reports + sessions summary — either perm satisfies; the per-row
   // filter is what narrows the result set for `client`. /reports is
-  // per-leg, /sessions is per-session rollup, same underlying data.
+  // per-leg, /sessions is per-session rollup, /summary is the
+  // pre-aggregated daily rollup (db/015), same underlying data + ACL.
   if (pathname === "/"
       || pathname.startsWith("/reports") || pathname.startsWith("/sessions")
-      || pathname.startsWith("/api/reports") || pathname.startsWith("/api/sessions")) {
+      || pathname.startsWith("/summary")
+      || pathname.startsWith("/api/reports") || pathname.startsWith("/api/sessions")
+      || pathname.startsWith("/api/summary")) {
     return [Perms.REPORTS_VIEW_OWN, Perms.REPORTS_VIEW_ALL];
   }
 
