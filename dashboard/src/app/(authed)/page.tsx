@@ -5,6 +5,7 @@
  */
 import { getSession } from "@/lib/auth";
 import { query } from "@/lib/db";
+import { loadDailyTraffic, type DailyTrafficRow } from "@/lib/overview";
 import Link from "next/link";
 
 interface Totals {
@@ -12,12 +13,6 @@ interface Totals {
   rows_1h: string;
   unique_sessions_24h: string;
   err_24h: string;
-}
-
-interface DailyTrafficRow {
-  day: string;                 // 'YYYY-MM-DD' (Africa/Nairobi local)
-  operator_name: string;
-  legs: number;
 }
 
 // ---------------------------------------------------------------------
@@ -59,41 +54,6 @@ async function loadTotals(shortcodeIds: number[] | null): Promise<Totals> {
   return r.rows[0]!;
 }
 
-async function loadDailyTraffic(
-  shortcodeIds: number[] | null,
-  monthYM: string,             // 'YYYY-MM'
-): Promise<DailyTrafficRow[]> {
-  // Africa/Nairobi day boundaries — the gateway operates in EAT and
-  // the dashboard's "today" should match. Without the AT TIME ZONE,
-  // late-night UTC legs would tip into the next day's bucket.
-  const scClause = shortcodeIds === null
-    ? "TRUE"
-    : (shortcodeIds.length === 0 ? "FALSE" : "shortcode_id = ANY($1::int[])");
-  const baseParams = shortcodeIds === null || shortcodeIds.length === 0 ? [] : [shortcodeIds];
-  const monthStart = `${monthYM}-01`;
-  const params = [...baseParams, monthStart];
-  const ix = baseParams.length + 1;       // $1 or $2 depending on whether scClause uses $1
-
-  const r = await query<{ day: string; operator_name: string; legs: string }>(
-    `SELECT
-       to_char(date_trunc('day', ts AT TIME ZONE 'Africa/Nairobi'), 'YYYY-MM-DD') AS day,
-       operator_name,
-       COUNT(*)::bigint AS legs
-       FROM ussd_session_logs
-      WHERE ts >= ($${ix}::date AT TIME ZONE 'Africa/Nairobi')
-        AND ts <  (($${ix}::date AT TIME ZONE 'Africa/Nairobi') + interval '1 month')
-        AND ${scClause}
-      GROUP BY 1, 2
-      ORDER BY 1, 2`,
-    params,
-  );
-  return r.rows.map((x) => ({
-    day: x.day,
-    operator_name: x.operator_name,
-    legs: Number(x.legs),
-  }));
-}
-
 // ---------------------------------------------------------------------
 //  Components
 // ---------------------------------------------------------------------
@@ -120,7 +80,7 @@ function buildMonthGrid(rows: DailyTrafficRow[], monthYM: string): DayCell[] {
   // Bucket the rows for O(N) lookup instead of O(N^2) per-cell find.
   const byKey: Record<string, number> = {};
   for (const r of rows) {
-    byKey[`${r.day}|${r.operator_name}`] = r.legs;
+    byKey[`${r.day}|${r.operator_name}`] = r.billable_units;
   }
   const grid: DayCell[] = [];
   for (let d = 1; d <= lastDay; d++) {
@@ -167,7 +127,7 @@ function TrafficBarChart({ rows, monthYM }: { rows: DailyTrafficRow[]; monthYM: 
           <div
             key={g.day}
             className="flex-1 flex items-end gap-px h-full"
-            title={`Day ${g.day} — ${g.total.toLocaleString()} legs`}
+            title={`Day ${g.day} — ${g.total.toLocaleString()} session counts`}
           >
             {OPERATORS.map((op) => {
               const n = g.counts[op] ?? 0;
@@ -210,7 +170,7 @@ function TrafficBarChart({ rows, monthYM }: { rows: DailyTrafficRow[]; monthYM: 
           ))}
         </div>
         <div className="text-xs text-slate-500">
-          Total: <span className="font-mono tabular-nums">{grandTotal.toLocaleString()}</span> legs
+          Total: <span className="font-mono tabular-nums">{grandTotal.toLocaleString()}</span> session counts
         </div>
       </div>
     </div>
@@ -310,7 +270,9 @@ export default async function Home({
           <div>
             <h2 className="text-lg font-medium">Daily traffic by network</h2>
             <p className="text-xs text-slate-500">
-              Legs per day, stacked by MNO. Day boundaries in Africa/Nairobi.
+              Session counts per day, by MNO — sums each operator's
+              billable units (CEIL(duration / billing window); 1 unit
+              per session for per-leg MNOs). Day boundaries in Africa/Nairobi.
             </p>
           </div>
           <MonthFilter current={month} />
