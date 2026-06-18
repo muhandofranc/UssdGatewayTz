@@ -66,7 +66,13 @@ export async function loadDailySummary(
   // GROUP BY projection per mode. All modes JOIN to the relevant
   // dimension table — small tables (operators ~5 rows, shortcodes
   // ~tens to hundreds, portal_users ~tens) — these joins are cheap.
-  let groupCol: string;
+  //
+  // `groupCol` is the SQL expression used as the secondary GROUP BY
+  // and ORDER BY key; `labelCol` is the SELECT-side display label.
+  // Both `null` in "date" mode — the SQL skips the extra clauses
+  // entirely (Postgres rejects `ORDER BY ''` with "non-integer
+  // constant in ORDER BY", so we can't fake it with a literal).
+  let groupCol: string | null;
   let labelCol: string;
   switch (groupBy) {
     case "date_operator":
@@ -88,7 +94,7 @@ export async function loadDailySummary(
       break;
     case "date":
     default:
-      groupCol = "''";
+      groupCol = null;
       labelCol = "NULL";
   }
 
@@ -129,6 +135,18 @@ export async function loadDailySummary(
   // The shortcodes + portal_users joins are LEFT so that
   // shortcode_id=0 rows (unmatched legs) still render — they have
   // s.code IS NULL, COALESCE'd to 'unmatched' in the SELECT.
+  //
+  // GROUP BY / ORDER BY shape depends on grouping mode: "date" mode
+  // has no secondary key (PG rejects `ORDER BY ''`); other modes
+  // append the group expression. labelCol is always in SELECT —
+  // for "date" mode it's NULL so the page can hide the column.
+  const groupBySql = groupCol
+    ? `GROUP BY d.date, ${groupCol}, ${labelCol}`
+    : `GROUP BY d.date`;
+  const orderBySql = groupCol
+    ? `ORDER BY d.date DESC, ${groupCol}`
+    : `ORDER BY d.date DESC`;
+
   const sql = `
     SELECT
       d.date::text                                AS date,
@@ -142,8 +160,8 @@ export async function loadDailySummary(
     LEFT JOIN shortcodes   s ON s.id = d.shortcode_id
     LEFT JOIN portal_users u ON u.id = s.owner_user_id
     ${where}
-    GROUP BY d.date, ${groupCol}, ${labelCol === groupCol ? "TRUE" : labelCol}
-    ORDER BY d.date DESC, ${groupCol}
+    ${groupBySql}
+    ${orderBySql}
     LIMIT ${Math.max(1, Math.min(maxRows, 50000))}
   `;
 
