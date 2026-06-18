@@ -1,5 +1,7 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { getSession, hasPerm } from "@/lib/auth";
+import { Perms } from "@/lib/rbac";
 import { getShortcode, listOperators, listPossibleOwners } from "@/lib/shortcodes";
 import ShortcodeFormFields from "../_form";
 import { actionUpdateShortcode } from "../actions";
@@ -10,6 +12,13 @@ interface Props {
 }
 
 export default async function EditShortcodePage({ params, searchParams }: Props) {
+  // Auditor (SHORTCODES_VIEW only) can reach this route via the
+  // middleware gate, but the edit form is meaningless to them — the
+  // submit would 403 in actions. Send them back to the list.
+  const session = await getSession();
+  if (!session || !hasPerm(session, Perms.SHORTCODES_MANAGE)) {
+    redirect("/shortcodes");
+  }
   const { id: idStr } = await params;
   const id = parseInt(idStr, 10);
   if (!Number.isFinite(id)) notFound();

@@ -18,3 +18,8 @@ venv/
 .DS_Store
 Thumbs.db
 docker-compose.yml
+
+# Node / Next.js — never commit build artefacts or installed deps
+node_modules/
+.next/
+dashboard/tsconfig.tsbuildinfo

@@ -1,10 +1,20 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getSession, hasPerm } from "@/lib/auth";
+import { Perms } from "@/lib/rbac";
 import { listRoles } from "@/lib/users";
 import { actionCreateUser } from "../actions";
 
 interface Props { searchParams: Promise<{ error?: string }>; }
 
 export default async function NewUserPage({ searchParams }: Props) {
+  // This is the super_admin-only flexible create form (any role, any
+  // shortcode owner). Auditor (view-only) AND client/Admin (creates
+  // viewers inline on /users) both get bounced back to the listing.
+  const session = await getSession();
+  if (!session || !hasPerm(session, Perms.PORTAL_USERS_MANAGE)) {
+    redirect("/users");
+  }
   const [roles, sp] = await Promise.all([listRoles(), searchParams]);
 
   return (

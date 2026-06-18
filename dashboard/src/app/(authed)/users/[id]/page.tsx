@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
-import { getSession } from "@/lib/auth";
+import { notFound, redirect } from "next/navigation";
+import { getSession, hasPerm } from "@/lib/auth";
+import { Perms } from "@/lib/rbac";
 import { getUser, listRoles } from "@/lib/users";
 import { actionResetPassword, actionUpdateUser } from "../actions";
 
@@ -10,12 +11,18 @@ interface Props {
 }
 
 export default async function EditUserPage({ params, searchParams }: Props) {
+  // Super_admin-only flexible edit page. Auditor (view-only) and
+  // client/Admin (uses inline form on /users) both get sent back.
+  const session = await getSession();
+  if (!session || !hasPerm(session, Perms.PORTAL_USERS_MANAGE)) {
+    redirect("/users");
+  }
   const { id: idStr } = await params;
   const id = parseInt(idStr, 10);
   if (!Number.isFinite(id)) notFound();
 
-  const [user, roles, session, sp] = await Promise.all([
-    getUser(id), listRoles(), getSession(), searchParams,
+  const [user, roles, sp] = await Promise.all([
+    getUser(id), listRoles(), searchParams,
   ]);
   if (!user) notFound();
 

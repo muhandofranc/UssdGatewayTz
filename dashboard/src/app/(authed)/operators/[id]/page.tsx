@@ -1,5 +1,7 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { getSession, hasPerm } from "@/lib/auth";
+import { Perms } from "@/lib/rbac";
 import { getOperator } from "@/lib/operators";
 import { actionUpdateOperator } from "../actions";
 
@@ -9,6 +11,12 @@ interface Props {
 }
 
 export default async function EditOperatorPage({ params, searchParams }: Props) {
+  // Auditor (OPERATORS_VIEW only) can reach this route via the
+  // middleware gate; the edit form would 403 on submit. Send them back.
+  const session = await getSession();
+  if (!session || !hasPerm(session, Perms.SHORTCODES_MANAGE)) {
+    redirect("/operators");
+  }
   const { id: idStr } = await params;
   const id = parseInt(idStr, 10);
   if (!Number.isFinite(id)) notFound();

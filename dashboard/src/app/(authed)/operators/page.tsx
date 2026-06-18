@@ -8,9 +8,13 @@
  * silently desync the adapters.
  */
 import Link from "next/link";
+import { getSession, hasPerm } from "@/lib/auth";
+import { Perms } from "@/lib/rbac";
 import { listOperatorsAdmin } from "@/lib/operators";
 
 export default async function OperatorsPage() {
+  const session = await getSession();
+  const canManage = !!session && hasPerm(session, Perms.SHORTCODES_MANAGE);
   const rows = await listOperatorsAdmin();
 
   return (
@@ -18,7 +22,9 @@ export default async function OperatorsPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Operators</h1>
         <div className="text-xs text-slate-500">
-          Per-MNO billing-window configuration. Edit a row to change.
+          {canManage
+            ? "Per-MNO billing-window configuration. Edit a row to change."
+            : "Per-MNO billing-window configuration (read-only)."}
         </div>
       </div>
 
@@ -30,7 +36,7 @@ export default async function OperatorsPage() {
               <th className="px-2 py-2 text-xs font-medium">Display</th>
               <th className="px-2 py-2 text-xs font-medium text-right">Billable window</th>
               <th className="px-2 py-2 text-xs font-medium">Active</th>
-              <th className="px-2 py-2 text-xs font-medium text-right">Actions</th>
+              {canManage ? <th className="px-2 py-2 text-xs font-medium text-right">Actions</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -48,9 +54,11 @@ export default async function OperatorsPage() {
                     ? <span className="inline-flex items-center rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5">active</span>
                     : <span className="inline-flex items-center rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.5">inactive</span>}
                 </td>
-                <td className="px-2 py-1.5 text-xs text-right">
-                  <Link href={`/operators/${r.id}`} className="underline">Edit</Link>
-                </td>
+                {canManage ? (
+                  <td className="px-2 py-1.5 text-xs text-right">
+                    <Link href={`/operators/${r.id}`} className="underline">Edit</Link>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>

@@ -1,24 +1,34 @@
 /**
  * /shortcodes — list with inline activate/deactivate + link to edit
- * and new. Super_admin only (middleware gates; layout double-checks).
+ * and new. super_admin gets the full write surface; auditor sees the
+ * same listing with all write affordances hidden (read-only).
+ * Middleware + the action layer both gate writes on SHORTCODES_MANAGE.
  */
 import Link from "next/link";
+import { getSession, hasPerm } from "@/lib/auth";
+import { Perms } from "@/lib/rbac";
 import { listShortcodes } from "@/lib/shortcodes";
 import { actionSetShortcodeActive } from "./actions";
 
 export default async function ShortcodesPage() {
+  const session = await getSession();
+  const canManage = !!session && hasPerm(session, Perms.SHORTCODES_MANAGE);
   const rows = await listShortcodes();
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Shortcodes</h1>
-        <Link
-          href="/shortcodes/new"
-          className="rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 px-3 py-1.5 text-sm font-medium"
-        >
-          + New shortcode
-        </Link>
+        {canManage ? (
+          <Link
+            href="/shortcodes/new"
+            className="rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 px-3 py-1.5 text-sm font-medium"
+          >
+            + New shortcode
+          </Link>
+        ) : (
+          <span className="text-xs text-slate-500 italic">read-only</span>
+        )}
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
@@ -33,7 +43,7 @@ export default async function ShortcodesPage() {
               <th className="px-2 py-2 text-xs font-medium">Auth</th>
               <th className="px-2 py-2 text-xs font-medium text-right">timeout</th>
               <th className="px-2 py-2 text-xs font-medium">Status</th>
-              <th className="px-2 py-2 text-xs font-medium text-right">Actions</th>
+              {canManage ? <th className="px-2 py-2 text-xs font-medium text-right">Actions</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -68,22 +78,26 @@ export default async function ShortcodesPage() {
                     </div>
                   ) : null}
                 </td>
-                <td className="px-2 py-1.5 text-xs text-right space-x-2">
-                  <Link href={`/shortcodes/${r.id}`} className="underline">Edit</Link>
-                  <form action={async () => {
-                    "use server";
-                    await actionSetShortcodeActive(r.id, r.status !== "active");
-                  }} className="inline">
-                    <button className="underline">
-                      {r.status === "active" ? "Deactivate" : "Reactivate"}
-                    </button>
-                  </form>
-                </td>
+                {canManage ? (
+                  <td className="px-2 py-1.5 text-xs text-right space-x-2">
+                    <Link href={`/shortcodes/${r.id}`} className="underline">Edit</Link>
+                    <form action={async () => {
+                      "use server";
+                      await actionSetShortcodeActive(r.id, r.status !== "active");
+                    }} className="inline">
+                      <button className="underline">
+                        {r.status === "active" ? "Deactivate" : "Reactivate"}
+                      </button>
+                    </form>
+                  </td>
+                ) : null}
               </tr>
             ))}
             {rows.length === 0 ? (
-              <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={9}>
-                No shortcodes yet. Click <Link href="/shortcodes/new" className="underline">+ New shortcode</Link> to add one.
+              <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={canManage ? 9 : 8}>
+                {canManage
+                  ? <>No shortcodes yet. Click <Link href="/shortcodes/new" className="underline">+ New shortcode</Link> to add one.</>
+                  : "No shortcodes yet."}
               </td></tr>
             ) : null}
           </tbody>

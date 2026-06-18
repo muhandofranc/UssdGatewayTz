@@ -32,16 +32,33 @@ export default async function AuthedLayout({
     { href: "/exports",     label: "Exports",     matchPrefix: "/exports"     },  // queued CSV jobs
     { href: "/integration", label: "Integration", matchPrefix: "/integration" },  // handler-URL contract docs
   ];
-  if (hasPerm(session, Perms.SHORTCODES_MANAGE)) {
+  // Shortcodes/Operators sidebar: show for super_admin (manage) AND
+  // auditor (view-only). Client/Admin sees their slim "My shortcodes"
+  // owner view; client_viewer sees neither.
+  const canSeeShortcodesAdmin =
+    hasPerm(session, Perms.SHORTCODES_MANAGE) || hasPerm(session, Perms.SHORTCODES_VIEW);
+  const canSeeOperatorsAdmin =
+    hasPerm(session, Perms.SHORTCODES_MANAGE) || hasPerm(session, Perms.OPERATORS_VIEW);
+  if (canSeeShortcodesAdmin) {
     items.push({ href: "/shortcodes", label: "Shortcodes", matchPrefix: "/shortcodes" });
+  }
+  if (canSeeOperatorsAdmin) {
     items.push({ href: "/operators",  label: "Operators",  matchPrefix: "/operators"  });
-  } else {
-    // Clients (no SHORTCODES_MANAGE) get a slim owner-only view where they
-    // can flip their own shortcodes between active/maintenance and set
-    // the on-air message.
+  }
+  // "My shortcodes": only for the Admin/client (they own shortcodes
+  // they can put into maintenance). Auditor sees the global list
+  // instead; client_viewer doesn't own anything.
+  if (!canSeeShortcodesAdmin && session.role === "client") {
     items.push({ href: "/my-shortcodes", label: "My shortcodes", matchPrefix: "/my-shortcodes" });
   }
-  if (hasPerm(session, Perms.PORTAL_USERS_MANAGE)) {
+  // Users sidebar: super_admin (manage), auditor (view), AND
+  // client/Admin (viewers.manage_own — manages their own read-only
+  // viewers via the same /users page, scoped server-side).
+  if (
+    hasPerm(session, Perms.PORTAL_USERS_MANAGE)
+    || hasPerm(session, Perms.PORTAL_USERS_VIEW)
+    || hasPerm(session, Perms.VIEWERS_MANAGE_OWN)
+  ) {
     items.push({ href: "/users", label: "Portal users", matchPrefix: "/users" });
   }
 
@@ -89,10 +106,12 @@ export default async function AuthedLayout({
               <Link href="/sessions"    className="hover:text-onfon-red transition-colors">Sessions</Link>
               <Link href="/reports"     className="hover:text-onfon-red transition-colors">Legs</Link>
               <Link href="/integration" className="hover:text-onfon-red transition-colors">Integration</Link>
-              {hasPerm(session, Perms.SHORTCODES_MANAGE)
+              {canSeeShortcodesAdmin
                 ? <Link href="/shortcodes" className="hover:text-onfon-red transition-colors">Shortcodes</Link>
                 : null}
-              {hasPerm(session, Perms.PORTAL_USERS_MANAGE)
+              {(hasPerm(session, Perms.PORTAL_USERS_MANAGE)
+                || hasPerm(session, Perms.PORTAL_USERS_VIEW)
+                || hasPerm(session, Perms.VIEWERS_MANAGE_OWN))
                 ? <Link href="/users" className="hover:text-onfon-red transition-colors">Users</Link>
                 : null}
             </nav>
