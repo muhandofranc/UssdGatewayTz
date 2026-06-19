@@ -51,6 +51,58 @@ services:
       HALOTEL_USSDGW_ID:             ${HALOTEL_USSDGW_ID:-1}
       HALOTEL_OUTBOUND_TIMEOUT_SECS: ${HALOTEL_OUTBOUND_TIMEOUT_SECS:-4}
 
+  # ----------------------------------------------------------------
+  # Daily scheduler — fires once a day at SCHEDULER_TIME (UTC, default
+  # 02:00). Refreshes yesterday's daily_session_summary row so the
+  # /summary page + Overview chart's PAST-days bars stay current.
+  # Edit TASKS_DAILY in app/scheduler.py to add more nightly tasks.
+  # ----------------------------------------------------------------
+  scheduler:
+    build:
+      context: .
+      args:
+        APT_REFRESH: ${APT_REFRESH:-build}
+    container_name: ussd-scheduler
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      USSD_PG_HOST:     ${USSD_PG_HOST}
+      USSD_PG_PORT:     ${USSD_PG_PORT:-5432}
+      USSD_PG_USER:     ${USSD_PG_USER}
+      USSD_PG_PASSWORD: ${USSD_PG_PASSWORD}
+      USSD_PG_DB:       ${USSD_PG_DB}
+      USSD_PG_SSLMODE:  ${USSD_PG_SSLMODE:-prefer}
+      SCHEDULER_MODE:   daily
+      SCHEDULER_TIME:   ${SCHEDULER_TIME:-02:00}      # UTC, HH:MM
+      LOG_LEVEL:        ${USSD_LOG_LEVEL:-INFO}
+    command: ["python", "-m", "app.scheduler"]
+
+  # ----------------------------------------------------------------
+  # Intraday scheduler — fires every SCHEDULER_INTERVAL_SECS (default
+  # 300 = 5 min). Refreshes today_session_summary_mv so the Overview
+  # chart's TODAY bar tracks live traffic. Edit TASKS_INTRADAY in
+  # app/scheduler.py to add more frequent tasks.
+  # ----------------------------------------------------------------
+  scheduler-intraday:
+    build:
+      context: .
+      args:
+        APT_REFRESH: ${APT_REFRESH:-build}
+    container_name: ussd-scheduler-intraday
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      USSD_PG_HOST:           ${USSD_PG_HOST}
+      USSD_PG_PORT:           ${USSD_PG_PORT:-5432}
+      USSD_PG_USER:           ${USSD_PG_USER}
+      USSD_PG_PASSWORD:       ${USSD_PG_PASSWORD}
+      USSD_PG_DB:             ${USSD_PG_DB}
+      USSD_PG_SSLMODE:        ${USSD_PG_SSLMODE:-prefer}
+      SCHEDULER_MODE:         intraday
+      SCHEDULER_INTERVAL_SECS: ${SCHEDULER_INTERVAL_SECS:-300}
+      LOG_LEVEL:              ${USSD_LOG_LEVEL:-INFO}
+    command: ["python", "-m", "app.scheduler"]
+
   # OPTIONAL — local echo handler for smoke testing. Comment out (or
   # remove this whole service) in production deployments; it's only
   # useful for the curl examples in the README that POST to ourselves.
