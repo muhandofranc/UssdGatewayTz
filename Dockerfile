@@ -35,12 +35,12 @@ COPY docs/ /app/docs/
 
 # Uvicorn worker count tuned for a typical 2-vCPU container. Override
 # via `command:` in compose if you scale up.
-EXPOSE 8080
+EXPOSE 8280
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", "--port", "8080", \
+     "--host", "0.0.0.0", "--port", "8280", \
      "--workers", "2", \
      "--proxy-headers", "--forwarded-allow-ips=*"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
+    CMD curl -fsS http://127.0.0.1:8280/healthz || exit 1

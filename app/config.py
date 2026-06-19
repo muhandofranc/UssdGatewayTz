@@ -101,7 +101,7 @@ def load() -> Settings:
     do NOT re-read env per request (cost + makes hot-swap unsafe)."""
     return Settings(
         pg=PgConfig(
-            host=os.environ.get("USSD_PG_HOST", "127.0.0.1"),
+            host=os.environ.get("USSD_PG_HOST", "172.16.0.164"),
             port=_env_int("USSD_PG_PORT", 5432),
             user=os.environ.get("USSD_PG_USER", "ussd_gw"),
             password=os.environ.get("USSD_PG_PASSWORD", ""),
@@ -112,7 +112,7 @@ def load() -> Settings:
             "USSD_HANDLER_DEFAULT_TIMEOUT_SECS", 5.0
         ),
         listen_host=os.environ.get("USSD_LISTEN_HOST", "0.0.0.0"),
-        listen_port=_env_int("USSD_LISTEN_PORT", 8080),
+        listen_port=_env_int("USSD_LISTEN_PORT", 8280),
         log_level=os.environ.get("USSD_LOG_LEVEL", "INFO"),
         halotel=HalotelConfig(
             inbound_user=os.environ.get("HALOTEL_INBOUND_USER", ""),

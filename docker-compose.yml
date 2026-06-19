@@ -51,6 +51,7 @@ services:
       HALOTEL_USSDGW_ID:             ${HALOTEL_USSDGW_ID:-1}
       HALOTEL_OUTBOUND_TIMEOUT_SECS: ${HALOTEL_OUTBOUND_TIMEOUT_SECS:-4}
 
+
   # ----------------------------------------------------------------
   # Daily scheduler — fires once a day at SCHEDULER_TIME (UTC, default
   # 02:00). Refreshes yesterday's daily_session_summary row so the
@@ -101,81 +102,7 @@ services:
       SCHEDULER_MODE:         intraday
       SCHEDULER_INTERVAL_SECS: ${SCHEDULER_INTERVAL_SECS:-300}
       LOG_LEVEL:              ${USSD_LOG_LEVEL:-INFO}
-    command: ["python", "-m", "app.scheduler"]
-
-  # OPTIONAL — local echo handler for smoke testing. Comment out (or
-  # remove this whole service) in production deployments; it's only
-  # useful for the curl examples in the README that POST to ourselves.
-  echo-handler:
-    image: python:3.12-slim
-    container_name: ussd-echo-handler
-    restart: unless-stopped
-    network_mode: host
-    working_dir: /app
-    volumes:
-      - ./tests/echo_handler.py:/app/echo_handler.py:ro
-    command: ["python", "/app/echo_handler.py"]
-
-  # Phase 3 — Next.js dashboard. Same Postgres as the gateway; no
-  # network coupling because both services use host networking to
-  # reach 127.0.0.1:${USSD_PG_PORT}.
-  dashboard:
-    build:
-      context: ./dashboard
-    container_name: ussd-dashboard
-    restart: unless-stopped
-    network_mode: host
-    environment:
-      USSD_PG_HOST:     ${USSD_PG_HOST}
-      USSD_PG_PORT:     ${USSD_PG_PORT:-5432}
-      USSD_PG_USER:     ${USSD_PG_USER}
-      USSD_PG_PASSWORD: ${USSD_PG_PASSWORD}
-      USSD_PG_DB:       ${USSD_PG_DB}
-      USSD_PG_SSLMODE:  ${USSD_PG_SSLMODE:-prefer}
-      DASHBOARD_PG_POOL_MAX: ${DASHBOARD_PG_POOL_MAX:-10}
-
-      SESSION_SECRET:           ${SESSION_SECRET}
-      SESSION_COOKIE_NAME:      ${SESSION_COOKIE_NAME:-ussd_gw_dashboard_session}
-      SESSION_TTL_SECONDS:      ${SESSION_TTL_SECONDS:-28800}
-      SESSION_COOKIE_INSECURE:  ${SESSION_COOKIE_INSECURE:-}
-
-      PORT: "3000"
-      HOSTNAME: "0.0.0.0"
-    volumes:
-      - ussd_exports:/exports
-
-  # Background CSV export worker. Same image as the dashboard
-  # (re-uses the standalone-traced pg module + the worker script
-  # copied in by the Dockerfile), invoked with a different CMD.
-  # Stays off the request loop so heavy exports don't block reads.
-  dashboard-exports-worker:
-    build:
-      context: ./dashboard
-    image: ussdgatewaytz-dashboard:latest
-    container_name: ussd-dashboard-exports-worker
-    restart: unless-stopped
-    network_mode: host
-    command: ["node", "/app/worker/exports_worker.mjs"]
-    environment:
-      USSD_PG_HOST:     ${USSD_PG_HOST}
-      USSD_PG_PORT:     ${USSD_PG_PORT:-5432}
-      USSD_PG_USER:     ${USSD_PG_USER}
-      USSD_PG_PASSWORD: ${USSD_PG_PASSWORD}
-      USSD_PG_DB:       ${USSD_PG_DB}
-      USSD_PG_SSLMODE:  ${USSD_PG_SSLMODE:-prefer}
-      EXPORTS_DIR:      /exports
-      EXPORTS_POLL_INTERVAL_MS: ${EXPORTS_POLL_INTERVAL_MS:-3000}
-      EXPORTS_CHUNK_SIZE:       ${EXPORTS_CHUNK_SIZE:-10000}
-      # Maintenance: zombie reaper resets 'running' rows whose worker
-      # died without marking failed; retention sweep deletes old CSVs.
-      EXPORTS_REAP_AFTER_SECONDS:      ${EXPORTS_REAP_AFTER_SECONDS:-600}
-      EXPORTS_RETENTION_DAYS:          ${EXPORTS_RETENTION_DAYS:-7}
-      EXPORTS_MAINTENANCE_INTERVAL_MS: ${EXPORTS_MAINTENANCE_INTERVAL_MS:-60000}
-    volumes:
-      - ussd_exports:/exports
-    depends_on:
-      dashboard:
-        condition: service_started
+    command: ["python", "-m", "app.scheduler"]      
 
 # Named volume shared between the dashboard (writes the file path
 # into portal_exports.file_path and streams it on /api/exports/<id>/
