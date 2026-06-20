@@ -20,11 +20,29 @@ function readPgConfig(): PoolConfig {
     : sslmode === "require" || sslmode === "verify-ca" || sslmode === "verify-full"
       ? { rejectUnauthorized: sslmode === "verify-full" }
       : undefined;
+  // Timeouts deliberately tight enough that ONE slow query can't hold
+  // a pool slot forever — that's the single most common cause of the
+  // dashboard going "responsive then hung". Tune via env if a real
+  // report needs a longer window.
   return {
     host, port, user, password, database, ssl,
     max: Number(process.env.DASHBOARD_PG_POOL_MAX || 10),
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
+    // Server-side kill — runaway queries get terminated by PG before
+    // they monopolise a slot. Surfaces as a normal SQL error so
+    // per-handler try/catch still works.
+    statement_timeout: Number(process.env.DASHBOARD_PG_STATEMENT_TIMEOUT_MS || 30_000),
+    // Client-side belt-and-braces — if statement_timeout misfires
+    // (e.g. network blip during query), pg-node gives up on the
+    // socket too.
+    query_timeout:     Number(process.env.DASHBOARD_PG_QUERY_TIMEOUT_MS     || 30_000),
+    // TCP keepalive — without this, a dead-but-not-FIN'd backend
+    // (PG restart, NAT reaper, k8s pod recycle) leaves a "ghost"
+    // connection in the pool that hangs forever until the OS-level
+    // TCP timeout (often >2 hours). Keepalive surfaces it in seconds.
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
     application_name: "ussd_gw_dashboard",
   };
 }
@@ -33,7 +51,18 @@ function readPgConfig(): PoolConfig {
 // module; cache the pool on globalThis to avoid leaking pools.
 declare global { var __ussdDashPool: Pool | undefined; }
 export const pool: Pool =
-  globalThis.__ussdDashPool ?? (globalThis.__ussdDashPool = new Pool(readPgConfig()));
+  globalThis.__ussdDashPool ?? (globalThis.__ussdDashPool = (() => {
+    const p = new Pool(readPgConfig());
+    // Surface idle-client errors so they don't crash the Node process.
+    // pg-node's default for an unhandled `error` on the pool is to
+    // emit "Unhandled 'error' event" → process.exit. We'd rather log
+    // and let the pool drop the bad client and serve the next request
+    // with a fresh one — same effect as docker restart but invisible.
+    p.on("error", (err) => {
+      console.error("[db.pool] idle client error:", err);
+    });
+    return p;
+  })());
 
 export async function query<T extends QueryResultRow = any>(
   text: string, params?: any[],

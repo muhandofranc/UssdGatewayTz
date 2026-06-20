@@ -102,7 +102,58 @@ services:
       SCHEDULER_MODE:         intraday
       SCHEDULER_INTERVAL_SECS: ${SCHEDULER_INTERVAL_SECS:-300}
       LOG_LEVEL:              ${USSD_LOG_LEVEL:-INFO}
-    command: ["python", "-m", "app.scheduler"]      
+    command: ["python", "-m", "app.scheduler"]
+
+  # ----------------------------------------------------------------
+  # Operator dashboard (Next.js, server-rendered). Reads the same
+  # Postgres the gateway writes to.
+  #
+  # The container was previously created out-of-band (no compose
+  # entry); this block makes it reproducible from compose. The
+  # healthcheck deliberately hits /api/health (which exercises the
+  # PG pool) rather than /login (static, can't detect a pool hang).
+  # Without that, an exhausted pool leaves the dashboard "looking
+  # healthy" while every authenticated page hangs — which is why
+  # operators had to manually bounce it.
+  # ----------------------------------------------------------------
+  dashboard:
+    build:
+      context: ./dashboard
+    image: ussdgatewaytz-dashboard
+    container_name: ussd-dashboard
+    restart: unless-stopped
+    # Same host-net rationale as the gateway: reaches the host's
+    # Postgres on 127.0.0.1:${USSD_PG_PORT} without a bridge hop.
+    network_mode: host
+    environment:
+      USSD_PG_HOST:     ${USSD_PG_HOST}
+      USSD_PG_PORT:     ${USSD_PG_PORT:-5432}
+      USSD_PG_USER:     ${USSD_PG_USER}
+      USSD_PG_PASSWORD: ${USSD_PG_PASSWORD}
+      USSD_PG_DB:       ${USSD_PG_DB}
+      USSD_PG_SSLMODE:  ${USSD_PG_SSLMODE:-prefer}
+      # PG pool sizing + per-query timeouts. Defaults are chosen so a
+      # runaway query gets killed server-side at 30s rather than
+      # holding a pool slot indefinitely — the failure mode that
+      # caused the "hangs until restart" symptom 2026-06-21.
+      DASHBOARD_PG_POOL_MAX:               ${DASHBOARD_PG_POOL_MAX:-10}
+      DASHBOARD_PG_STATEMENT_TIMEOUT_MS:   ${DASHBOARD_PG_STATEMENT_TIMEOUT_MS:-30000}
+      DASHBOARD_PG_QUERY_TIMEOUT_MS:       ${DASHBOARD_PG_QUERY_TIMEOUT_MS:-30000}
+      NODE_ENV: production
+      PORT:     "3000"
+    volumes:
+      - ussd_exports:/exports
+    healthcheck:
+      # /api/health does a SELECT 1 — a healthy response means BOTH
+      # Next.js is up AND the PG pool can serve a connection within
+      # statement_timeout. Pool exhaustion ⇒ probe 503 ⇒ docker
+      # marks unhealthy ⇒ restart: unless-stopped recreates the
+      # container automatically.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 # Named volume shared between the dashboard (writes the file path
 # into portal_exports.file_path and streams it on /api/exports/<id>/
