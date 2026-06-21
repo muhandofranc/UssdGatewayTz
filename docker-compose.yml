@@ -139,6 +139,15 @@ services:
       DASHBOARD_PG_POOL_MAX:               ${DASHBOARD_PG_POOL_MAX:-10}
       DASHBOARD_PG_STATEMENT_TIMEOUT_MS:   ${DASHBOARD_PG_STATEMENT_TIMEOUT_MS:-30000}
       DASHBOARD_PG_QUERY_TIMEOUT_MS:       ${DASHBOARD_PG_QUERY_TIMEOUT_MS:-30000}
+      # Session cookie + signer. SESSION_SECRET is REQUIRED — the app
+      # refuses to mint sessions if it's unset or <48 chars (login &
+      # audit-export both throw at request time, not boot time, which
+      # is why a missing var here surfaces as a 500 on /login rather
+      # than a container exit). Generate with `openssl rand -hex 32`.
+      SESSION_SECRET:           ${SESSION_SECRET}
+      SESSION_COOKIE_NAME:      ${SESSION_COOKIE_NAME:-ussd_dash}
+      SESSION_TTL_SECONDS:      ${SESSION_TTL_SECONDS:-28800}
+      SESSION_COOKIE_INSECURE:  ${SESSION_COOKIE_INSECURE:-0}
       NODE_ENV: production
       PORT:     "3000"
     volumes:
