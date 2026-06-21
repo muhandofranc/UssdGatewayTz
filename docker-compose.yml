@@ -119,6 +119,12 @@ services:
   dashboard:
     build:
       context: ./dashboard
+      args:
+        # Cache-buster so apk update+upgrade in the Dockerfile picks up
+        # new alpine security fixes on rebuild. Drive with a unique
+        # value per build (BUILD_ID / date / git short SHA) — without
+        # it buildx caches the upgrade layer and silently skips fixes.
+        APK_REFRESH: ${APK_REFRESH:-build}
     image: ussdgatewaytz-dashboard
     container_name: ussd-dashboard
     restart: unless-stopped

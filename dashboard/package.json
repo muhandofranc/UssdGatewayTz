@@ -9,12 +9,15 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "next": "15.0.4",
+    "next": "15.5.18",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "jose": "5.9.6",
     "bcryptjs": "2.4.3",
     "pg": "8.13.1"
+  },
+  "overrides": {
+    "picomatch": "4.0.4"
   },
   "devDependencies": {
     "@types/bcryptjs": "2.4.6",

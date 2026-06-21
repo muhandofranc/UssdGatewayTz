@@ -8,4 +8,4 @@ PyYAML==6.0.2
 # when the inbound POST has Content-Type: application/x-www-form-urlencoded
 # (Vodacom-via-glpvodaUssd proxy + Tigo/Airtel form-style requests).
 # Without it Starlette raises AssertionError before our handler runs.
-python-multipart==0.0.19
+python-multipart==0.0.30

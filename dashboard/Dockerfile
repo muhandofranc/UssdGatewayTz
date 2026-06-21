@@ -8,6 +8,18 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 
+# APK_REFRESH is a cache-buster — pass any unique value (build_id /
+# date) at build time so the apk update+upgrade layer doesn't get
+# served from the buildx cache, forcing it to pick up any new alpine
+# security patches published after the cached layer was built. Same
+# pattern as APT_REFRESH in the gateway Dockerfile. Without this,
+# alpine fixes (e.g. CVE-2026-45447 openssl heap UAF, fixed at
+# libcrypto3 3.5.7-r0) silently get skipped on rebuild.
+ARG APK_REFRESH=build
+RUN echo "apk-refresh=${APK_REFRESH}" > /etc/apk-refresh \
+ && apk update \
+ && apk upgrade --no-cache
+
 # Copy manifest first so this layer only re-runs when deps change.
 COPY package.json package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
@@ -25,6 +37,16 @@ RUN npm run build
 # ---------- 2. runtime -------------------------------------------------
 FROM node:22-alpine AS runtime
 WORKDIR /app
+
+# Cache-bust the runtime apk-upgrade too — the builder's upgrade only
+# patches the builder layer; the runtime layer is what actually ships
+# and runs, so it needs its own patched alpine. Re-using the same ARG
+# value across stages is fine; buildx still treats each FROM's layer
+# cache separately.
+ARG APK_REFRESH=build
+RUN echo "apk-refresh=${APK_REFRESH}" > /etc/apk-refresh \
+ && apk update \
+ && apk upgrade --no-cache
 
 ENV NODE_ENV=production \
     PORT=3000 \
@@ -56,7 +78,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/worker ./worker
 USER nextjs
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:3000/login >/dev/null || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1
 
 CMD ["node", "server.js"]

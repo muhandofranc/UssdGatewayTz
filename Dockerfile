@@ -8,10 +8,17 @@ FROM python:3.12-slim AS runtime
 
 # APT_REFRESH is a cache-buster — pass any new value (date / CI run
 # id) to force a fresh apt-get update layer for security fixes.
+# Without the cache-bust + explicit `upgrade`, Debian fixes (e.g.
+# CVE-2026-45447 openssl heap UAF, fixed at libssl3t64 3.5.6-1deb13u2)
+# get silently skipped on rebuild because the RUN command bytes
+# don't change.
 ARG APT_REFRESH=build
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN echo "apt-refresh=${APT_REFRESH}" > /etc/apt-refresh \
+ && apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends \
         ca-certificates curl tzdata \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
 ENV TZ=Africa/Dar_es_Salaam \
     PYTHONUNBUFFERED=1 \
