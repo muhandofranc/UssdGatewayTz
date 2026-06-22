@@ -68,13 +68,18 @@ handler needs them.)
 Authentication
 --------------
 
-`user`/`pass` are credentials. INBOUND: Halotel sends the user/pass
-we provisioned for them (configured via `HALOTEL_INBOUND_USER` /
-`HALOTEL_INBOUND_PASS`). On mismatch we ack with
-`<errorCode>1</errorCode>` per the spec — NOT an HTTP 401 — so
-Halotel's SOAP receiver handles it gracefully. OUTBOUND: WE send
-the user/pass that Halotel provisioned for us
-(`HALOTEL_OUTBOUND_USER` / `HALOTEL_OUTBOUND_PASS`).
+`user`/`pass` are credentials. Per-shortcode credential mode (since
+2026-06-22): Halotel's USSDGW provisions different user/pass values
+per shortcode, so the gateway does NOT validate inbound credentials
+against a fixed env var — it just captures them and echoes them on
+the outbound POST. Authentication is enforced at the NETWORK edge
+(IP whitelist for Halotel's USSDGW source). The
+`HALOTEL_OUTBOUND_USER` / `HALOTEL_OUTBOUND_PASS` env vars are kept
+only as a defensive fallback when the inbound carried no creds;
+`HALOTEL_INBOUND_USER` / `HALOTEL_INBOUND_PASS` are unused. The
+`render_auth_failed()` method is retained for future per-shortcode
+auth schemes (e.g. validating against a `shortcodes.expected_user`
+column) but is not currently wired.
 
 Service-code lookup
 -------------------
@@ -172,6 +177,10 @@ def _parse_soap(body: bytes) -> dict:
         "transactionid": _xtext(insert_mo, "transactionid"),
         "requesttype":   _xtext(insert_mo, "requestType"),
         "ussdgw_id":     _xtext(insert_mo, "ussdgw_id"),
+        # Captured for log attribution. Halotel sends this on every
+        # leg; useful when troubleshooting subscriber-side issues
+        # without exposing the MSISDN in cross-team logs.
+        "imsi":          _xtext(insert_mo, "imsi"),
     }
 
 
@@ -187,7 +196,8 @@ def _outbound_request_type(inbound_type: str, action: Action) -> str:
 
 def _build_outbound_envelope(
     *,
-    cfg: HalotelConfig,
+    out_user: str,
+    out_pass: str,
     msisdn: str,
     msg: str,
     sessionid: str,
@@ -203,6 +213,14 @@ def _build_outbound_envelope(
     Per the spec example, `msisdn` and `sessionid` are sent as
     literal 'null' when absent — Halotel rejects empty elements.
     We send the actual values when we have them.
+
+    `out_user` / `out_pass` are the credentials to echo back on the
+    outbound POST. As of 2026-06-22 these are read off the inbound
+    SOAP body (push_outbound pulls them from raw_payload), rather
+    than from a fixed HALOTEL_OUTBOUND_USER/PASS env, so different
+    shortcodes routed through the same gateway can carry different
+    Halotel credentials. The env values are kept only as a defensive
+    fallback when the inbound didn't include creds.
     """
     # Use ET in Clark-notation mode (`{ns}tag`) and let it auto-pick a
     # prefix; we then rewrite the prefix to `soap:` for spec-faithful
@@ -217,14 +235,14 @@ def _build_outbound_envelope(
         el = ET.SubElement(insert_mo, tag)
         el.text = value if value else "null"
 
-    _add("user",          cfg.outbound_user)
-    _add("pass",          cfg.outbound_pass)
+    _add("user",          out_user)
+    _add("pass",          out_pass)
     _add("msisdn",        msisdn)
     _add("msg",           msg or "")
     _add("sessionid",     sessionid)
     _add("transactionid", transactionid)
     _add("requestType",   request_type)
-    _add("ussdgw_id",     ussdgw_id or cfg.ussdgw_id_default)
+    _add("ussdgw_id",     ussdgw_id)
 
     # Rewrite ET's auto-prefix (`ns0`) → `soap` for spec faithfulness.
     raw = ET.tostring(env, encoding="utf-8", xml_declaration=True)
@@ -284,19 +302,22 @@ class Halotel:
         if event is None:
             raise HTTPException(400, f"halotel: unknown requestType={request_type!r}")
 
-        # Cred check — failure surfaces as a special sentinel event
-        # (AUTH_FAILED is not in unified.py; we use a raw_payload flag
-        # the pipeline reads to short-circuit with the auth-failed
-        # ack instead of the OK ack). Caller checks raw_payload['_auth_ok'].
+        # Per-shortcode credentials: Halotel sends the user/pass that
+        # the SUBSCRIBER's destination expects, and the gateway must
+        # echo those same credentials on the outbound POST back to
+        # Halotel's USSDGW. Different shortcodes routed through the
+        # same gateway can carry different creds, so we do NOT
+        # validate against a single HALOTEL_INBOUND_USER/PASS env
+        # var any more. Authentication is enforced at the network
+        # edge instead (IP whitelist for Halotel's USSDGW source).
+        #
+        # The user/pass remain in raw_payload so push_outbound() can
+        # pull them when building the outbound envelope. The pass is
+        # redacted in the audit-row copy so it doesn't get persisted
+        # in cleartext via log_leg.
         cfg = self._cfg()
-        auth_ok = (
-            fields["user"] == cfg.inbound_user
-            and fields["pass"] == cfg.inbound_pass
-        )
-        # Don't log the password back; redact in the audit row.
         raw_for_log = dict(fields)
         raw_for_log["pass"] = "***" if fields["pass"] else ""
-        raw_for_log["_auth_ok"] = "1" if auth_ok else "0"
 
         sessionid = fields["sessionid"]
         transactionid = fields["transactionid"]
@@ -330,15 +351,19 @@ class Halotel:
                 service_code = prefix_match.code
                 ussd_string  = prefix_match.remainder
 
-            if auth_ok:
-                db.upsert_active_session(
-                    session_id=transactionid, operator_id=op_id,
-                    service_code=service_code, shortcode_id=None,
-                    msisdn=msisdn, ussd_string=ussd_string,
-                )
+            db.upsert_active_session(
+                session_id=transactionid, operator_id=op_id,
+                service_code=service_code, shortcode_id=None,
+                msisdn=msisdn, ussd_string=ussd_string,
+            )
         elif event is SessionEvent.INPUT:
             prior = db.get_active_session(transactionid, op_id)
             if prior is None:
+                # Session lookup failed (cache evicted / never opened).
+                # We can't recover service_code or msisdn here — both
+                # default to empty and the handler / downstream logs
+                # will surface the gap. Spec compliance still requires
+                # we ack the inbound so Halotel doesn't keep retrying.
                 service_code = ""
                 ussd_string  = (msg or "").strip()
             else:
@@ -349,19 +374,29 @@ class Halotel:
                 # accumulate for log-line consistency.
                 from ._common import accumulate_ussd_string
                 ussd_string = accumulate_ussd_string(prior.ussd_string, msg)
+                # Halotel ships an EMPTY <msisdn></msisdn> on every
+                # leg after the opening 100. Recover from the cached
+                # session BEFORE building UnifiedRequest so the
+                # handler + outbound push see the real subscriber
+                # number rather than an empty string.
+                if not msisdn:
+                    msisdn = prior.msisdn
                 db.upsert_active_session(
                     session_id=transactionid, operator_id=op_id,
                     service_code=service_code,
                     shortcode_id=prior.shortcode_id,
-                    msisdn=msisdn or prior.msisdn,
+                    msisdn=msisdn,
                     ussd_string=ussd_string,
                 )
         else:
             # USER_CANCELLED / DELIVERY_ACK / TIMEOUT — read cached
-            # service_code for log attribution, no state mutation.
+            # service_code + msisdn for log attribution, no state
+            # mutation. Halotel also omits msisdn on these legs.
             prior = db.get_active_session(transactionid, op_id)
             service_code = prior.service_code if prior else ""
             ussd_string  = prior.ussd_string  if prior else ""
+            if prior is not None and not msisdn:
+                msisdn = prior.msisdn
 
         return UnifiedRequest(
             operator=self.operator,
@@ -396,22 +431,40 @@ class Halotel:
         (pipeline) logs but doesn't retry (USSD has no retry semantics
         within a session)."""
         cfg = self._cfg()
-        if not cfg.outbound_url or not cfg.outbound_user:
+        if not cfg.outbound_url:
             LOGGER.warning(
-                "halotel outbound disabled (HALOTEL_OUTBOUND_URL / "
-                "HALOTEL_OUTBOUND_USER unset) — dropping push for "
-                "transactionid=%s",
+                "halotel outbound disabled (HALOTEL_OUTBOUND_URL "
+                "unset) — dropping push for transactionid=%s",
                 ur.session_id,
             )
             return {"error": "outbound_unconfigured"}
 
-        inbound_type = (ur.raw_payload or {}).get("requesttype", "")
+        raw          = ur.raw_payload or {}
+        inbound_type = raw.get("requesttype", "")
         out_type     = _outbound_request_type(inbound_type, reply.action)
-        sessionid    = (ur.raw_payload or {}).get("sessionid", "")
-        ussdgw_id    = (ur.raw_payload or {}).get("ussdgw_id", "") or cfg.ussdgw_id_default
+        sessionid    = raw.get("sessionid", "")
+        ussdgw_id    = raw.get("ussdgw_id", "") or cfg.ussdgw_id_default
+
+        # Echo the inbound credentials on the outbound POST. Halotel's
+        # USSDGW provisions per-shortcode user/pass, so we mirror
+        # whatever it sent us rather than relying on a single env-var
+        # pair. Fall back to HALOTEL_OUTBOUND_USER/PASS only when the
+        # inbound carried nothing (defensive — shouldn't happen for
+        # spec-conformant traffic).
+        out_user = raw.get("user", "") or cfg.outbound_user
+        out_pass = raw.get("pass", "") or cfg.outbound_pass
+        if not out_user:
+            LOGGER.warning(
+                "halotel outbound has no user (inbound user empty + "
+                "no HALOTEL_OUTBOUND_USER fallback) for "
+                "transactionid=%s — pushing anyway; Halotel will "
+                "likely reject with errorCode=1",
+                ur.session_id,
+            )
 
         envelope = _build_outbound_envelope(
-            cfg=cfg,
+            out_user=out_user,
+            out_pass=out_pass,
             msisdn=ur.msisdn,
             msg=reply.message,
             sessionid=sessionid,

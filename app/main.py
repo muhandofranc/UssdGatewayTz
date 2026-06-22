@@ -621,13 +621,16 @@ async def ussd_tigo(req: Request) -> Response:
 @app.post("/ussd/halotel", tags=["MNO ingress"], summary="Halotel SOAP USSD ingress")
 async def ussd_halotel(req: Request) -> Response:
     """**Request** — SOAP 1.1 envelope (`text/xml; charset=utf-8`).
-    Inbound op carries the leg type + body. Auth via the basic-auth
-    header configured by `HALOTEL_INBOUND_USER` / `HALOTEL_INBOUND_PASS`;
-    bad creds → SOAP fault with code `101`.
+    Inbound op carries the leg type + body. Credentials in the
+    `<user>`/`<pass>` SOAP elements are captured per-shortcode and
+    echoed on the outbound POST rather than validated against a
+    fixed env var (per-shortcode credential mode — see
+    `adapters/halotel.py`). Authentication is enforced upstream by
+    IP whitelist on Halotel's USSDGW source.
 
-    **Response** — SOAP envelope with the gateway's reply body and the
-    leg-type code (`CON`/`END` analogues). Outbound async pushes are
-    sent by the gateway to `HALOTEL_OUTBOUND_URL` separately."""
+    **Response** — SOAP envelope acking the inbound (`errorCode=0`).
+    The menu body is delivered to Halotel asynchronously via
+    `HALOTEL_OUTBOUND_URL`."""
     return await _handle_ussd(req, "halotel")
 
 
