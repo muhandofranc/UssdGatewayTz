@@ -183,7 +183,15 @@ CREATE TABLE IF NOT EXISTS ussd_session_logs (
     handler_elapsed_ms       INTEGER,                           -- handler round-trip
     error_class              VARCHAR(32),                       -- nullable: 'shortcode_not_found' / 'handler_timeout' / etc.
     error_detail             TEXT,
-    CHECK (direction IN ('inbound', 'response'))
+    -- 'inbound'  — what the MNO POSTed at us (sync ack path).
+    -- 'response' — what we returned synchronously on the inbound HTTP
+    --              (sync MNOs: Vodacom, Airtel, Tigo).
+    -- 'async_outbound' — async MNOs (Halotel) emit the menu body on a
+    --              separate outbound POST AFTER acking the inbound;
+    --              that POST is logged with this direction.
+    -- The 'async_outbound' value was added in db/017 — when restoring
+    -- from this file alone, you get the wider constraint up front.
+    CHECK (direction IN ('inbound', 'response', 'async_outbound'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_ussd_logs_ts             ON ussd_session_logs (ts);

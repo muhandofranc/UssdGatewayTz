@@ -94,18 +94,24 @@ def _parse_handler_reply(status: int, body_text: str) -> tuple[UnifiedReply | No
         return UnifiedReply(action=act, message=str(msg)), None
 
     # Plain-text path: first token is CON/END, rest is the message.
-    head, _, tail = stripped.partition(" ")
-    act = _coerce_action(head)
-    if act is None:
-        # Sometimes the handler returns just "CON\n..." or "END".
-        first_line = stripped.split("\n", 1)
-        head2 = first_line[0].strip()
-        tail2 = first_line[1] if len(first_line) > 1 else ""
-        act = _coerce_action(head2)
-        if act is None:
-            return None, "bad_action"
-        return UnifiedReply(action=act, message=tail2.strip()), None
-    return UnifiedReply(action=act, message=tail.strip()), None
+    # We accept three concrete shapes seen in the wild:
+    #   * "CON Chagua…"       — canonical, space-separated
+    #   * "CON\nChagua…"      — newline after the action token
+    #   * "CONChagua…"        — no separator at all (some legacy
+    #     walkers do `menuType . "" . title` rather than
+    #     `menuType . " " . title`; observed on Halotel's SunKing
+    #     walker 2026-06-22, was producing bad_action across the board)
+    # Falling through any of these returns bad_action.
+    upper = stripped.upper()
+    for prefix in ("CON", "END"):
+        if upper.startswith(prefix):
+            # Strip the action prefix; the message is everything after,
+            # with leading whitespace (incl. a literal space, newline,
+            # or nothing) trimmed.
+            msg = stripped[len(prefix):].lstrip()
+            return UnifiedReply(action=_coerce_action(prefix),
+                                message=msg.rstrip()), None
+    return None, "bad_action"
 
 
 async def forward(
