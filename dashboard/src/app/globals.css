@@ -13,9 +13,37 @@ body {
   /* Light mode: very-faint warm grey instead of stark white so pages
    * don't read as a blank document. Dark mode unchanged. Body bg uses
    * raw CSS because Tailwind's @apply doesn't pick up arbitrary-value
-   * utilities (`bg-[#FAFAFB]`) reliably across builds. */
+   * utilities (`bg-[#FAFAFB]`) reliably across builds.
+   *
+   * Body text is slate-950 (vs. the prior slate-900) so plain prose
+   * reads with stronger contrast on the off-white background; secondary
+   * elements that need a softer tone still override locally with
+   * `text-slate-500`/`text-slate-400`. */
   background-color: #FAFAFB;
-  @apply text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+  @apply text-slate-950 antialiased dark:bg-slate-950 dark:text-slate-100;
+}
+
+/* ----- Tables: legibility + zebra striping -------------------------
+ *
+ * Two complaints addressed here at the CSS layer so individual pages
+ * don't need to change:
+ *   1. Header / body text felt faint — bump to a stronger slate ramp
+ *      that holds up against the page bg and the thead's slate-100
+ *      stripe.
+ *   2. Rows ran together — add a subtle alternating background tint
+ *      so the eye can track across columns.
+ *
+ * Per-row inline `hover:bg-…` classes (specificity 0,2,0: one class
+ * + one pseudo) still win over the zebra rule (0,1,3: one pseudo +
+ * three element selectors), so hover feedback survives. */
+table thead th {
+  @apply text-slate-700 dark:text-slate-200;
+}
+table tbody td {
+  @apply text-slate-800 dark:text-slate-100;
+}
+table tbody tr:nth-child(even) {
+  @apply bg-slate-50 dark:bg-slate-900/40;
 }
 
 /* Wordmark gradient — same hues as the brand-gradient utility but
