@@ -246,7 +246,22 @@ def _build_outbound_envelope(
 
     # Rewrite ET's auto-prefix (`ns0`) → `soap` for spec faithfulness.
     raw = ET.tostring(env, encoding="utf-8", xml_declaration=True)
-    return raw.replace(b"ns0:", b"soap:").replace(b"xmlns:ns0=", b"xmlns:soap=")
+    raw = raw.replace(b"ns0:", b"soap:").replace(b"xmlns:ns0=", b"xmlns:soap=")
+    # Halotel's USSDGW returns errorCode=1 ("User/Pass/IP does not
+    # match") when our outbound envelope is missing the xsi + xsd
+    # xmlns declarations the spec's example shows on <soap:Envelope>.
+    # Observed 2026-06-22 — our menus reached the gateway pipeline,
+    # the walker rendered correctly, but Halotel rejected delivery
+    # back. The legacy walker (Utilities/Utilities.php createXMLSchema)
+    # declares all three and consistently gets errorCode=0; mirror
+    # that exactly.
+    raw = raw.replace(
+        b'<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">',
+        b'<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"'
+        b' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+        b' xmlns:xsd="http://www.w3.org/2001/XMLSchema">',
+    )
+    return raw
 
 
 def _parse_outbound_ack(body_text: str) -> tuple[Optional[str], Optional[str]]:
@@ -473,9 +488,12 @@ class Halotel:
             ussdgw_id=ussdgw_id,
         )
 
+        # Headers mirror the legacy Utilities.php sendUssdMenuResponse()
+        # exactly: just Content-Type, no SOAPAction. Halotel's spec
+        # doesn't require SOAPAction; legacy never sent it and got
+        # errorCode=0 reliably, so we keep parity with that.
         headers = {
             "Content-Type": "text/xml; charset=utf-8",
-            "SOAPAction":   '"http://tempuri.org/InsertMO"',
         }
         try:
             async with httpx.AsyncClient(timeout=cfg.outbound_timeout_secs) as client:
