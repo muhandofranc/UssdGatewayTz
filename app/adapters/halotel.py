@@ -51,25 +51,22 @@ Inbound requestType mapping
 Outbound requestType selection
 ------------------------------
 
-The wire has 5 outbound types (200/201/202/203/204) — we collapse
-to 3 cases that vary on (first-leg-END) × (any-CON) × (subsequent-END):
+Only two outbound types are emitted: 202 for CON, 203 for END. The
+legacy walker uses 203 for every terminal push (one-screen results,
+multi-leg results, "service unavailable" closes, etc.) regardless of
+whether the inbound was the first leg (100) or a follow-up (101).
+201 is reserved by the spec for "notify + close" but the walker
+never sends it on the wire, so we don't either — matching legacy
+parity avoids surprising Halotel's USSDGW with a code it rarely sees.
 
 | Inbound was | Reply action | Outbound `requestType` | Meaning |
 |-------------|--------------|------------------------|---------|
-| `100` (first) | `CON`      | `202`                  | Menu requesting input |
-| `100` (first) | `END`      | `201`                  | Notify + close (single-shot) |
-| `101` (input) | `CON`      | `202`                  | Menu requesting input |
-| `101` (input) | `END`      | `203`                  | Last menu, terminate transaction |
+| any           | `CON`      | `202`                  | Menu requesting input |
+| any           | `END`      | `203`                  | Last menu, terminate transaction |
 
-Empirically validated 2026-06-23 against the legacy walker logs —
-follow-up "Weka X" prompts (after type=101) push with requestType=202,
-NOT 200. The 200/202 distinction in Halotel's spec table reads like
-both mean "menu requesting input", but only 202 is what's used on the
-wire. 200 is reserved for an edge case we haven't seen in practice.
-
-(`204` "notify mid-tx then close" and `205`/`206` system abort/cancel
-are not yet emitted — extend `_outbound_request_type()` when a
-handler needs them.)
+Empirically validated 2026-06-23 against the legacy walker logs.
+(`200`, `201`, `204` and the abort/cancel `205`/`206` are not emitted —
+extend `_outbound_request_type()` when a handler needs them.)
 
 Authentication
 --------------
@@ -213,14 +210,11 @@ def _parse_soap(body: bytes) -> dict:
 
 
 def _outbound_request_type(inbound_type: str, action: Action) -> str:
-    """Map (inbound requestType, handler reply action) → outbound type.
-    Any CON → 202 (menu requesting input). END after first leg (100) →
-    201 (single-shot notify + close). END after subsequent legs → 203
-    (last menu + terminate). See module docstring for the empirical
-    validation against the legacy walker."""
-    if action == Action.CON:
-        return "202"
-    return "201" if inbound_type == "100" else "203"
+    """Map handler reply action → Halotel outbound requestType.
+    CON → 202 (menu requesting input), END → 203 (terminate transaction).
+    See module docstring for why we don't differentiate END after START
+    (no use of 201)."""
+    return "202" if action == Action.CON else "203"
 
 
 def _build_outbound_envelope(
