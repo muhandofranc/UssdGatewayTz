@@ -5,6 +5,16 @@ executes them against the configured Postgres. Every statement in
 the migration files is idempotent (CREATE … IF NOT EXISTS / INSERT
 … ON CONFLICT DO NOTHING) so this is safe to run multiple times.
 
+Concurrency: docker-compose starts gateway, scheduler, and
+scheduler-intraday in parallel — they share this image and run the
+same entrypoint, so all three would otherwise race on the same
+migration set. A few migrations (notably db/013) take an
+ACCESS EXCLUSIVE lock on `ussd_session_logs` for non-CONCURRENT
+CREATE INDEX statements; two callers in flight at once deadlock
+(`psycopg2.errors.DeadlockDetected` observed 2026-06-23). The
+pg_advisory_lock below serialises callers: only one runs the loop
+at a time, the others wait then no-op through idempotent files.
+
 For a real production migration story, swap this for Alembic or
 sqitch later (Phase 4) — this script is just the dev / first-deploy
 bootstrap.
@@ -18,6 +28,14 @@ import sys
 import psycopg2
 
 from .config import load as load_settings
+
+
+# Application-specific advisory lock key. Any 64-bit signed integer
+# works; this constant is hardcoded so the lock identity is stable
+# across deploys and rebuilds. Session-scoped — auto-released if the
+# holding connection drops mid-run (e.g. container OOM during a long
+# migration), so there's no risk of permanent lock-out.
+_MIGRATION_LOCK_KEY = 4815162342
 
 
 def _migrations_dir() -> str:
@@ -49,12 +67,26 @@ def main() -> int:
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
-            for f in files:
-                path = os.path.join(mdir, f)
-                logging.info("  applying %s", f)
-                with open(path, "r", encoding="utf-8") as fh:
-                    sql = fh.read()
-                cur.execute(sql)
+            # Serialise across containers — see module docstring. The
+            # first caller to arrive runs the loop; the rest block here
+            # until pg_advisory_unlock, then iterate through files that
+            # are now all already-applied (IF NOT EXISTS / ON CONFLICT)
+            # and exit in well under a second.
+            logging.info("acquiring migration lock (key=%s)…",
+                         _MIGRATION_LOCK_KEY)
+            cur.execute("SELECT pg_advisory_lock(%s)",
+                        (_MIGRATION_LOCK_KEY,))
+            logging.info("migration lock acquired")
+            try:
+                for f in files:
+                    path = os.path.join(mdir, f)
+                    logging.info("  applying %s", f)
+                    with open(path, "r", encoding="utf-8") as fh:
+                        sql = fh.read()
+                    cur.execute(sql)
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(%s)",
+                            (_MIGRATION_LOCK_KEY,))
         logging.info("migrations complete")
     finally:
         conn.close()

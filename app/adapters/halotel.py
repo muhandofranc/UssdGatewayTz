@@ -310,6 +310,10 @@ class Halotel:
 
     async def parse(self, req: Request) -> UnifiedRequest:
         body = await req.body()
+        LOGGER.info("halotel INBOUND SOAP %s %s from=%s: %s",
+                    req.method, str(req.url),
+                    req.client.host if req.client else "-",
+                    body.decode("utf-8", errors="replace"))
         fields = _parse_soap(body)
 
         request_type = fields["requesttype"]
@@ -487,9 +491,11 @@ class Halotel:
             request_type=out_type,
             ussdgw_id=ussdgw_id,
         )
+        LOGGER.info("halotel OUTBOUND SOAP url=%s transactionid=%s: %s",
+                    cfg.outbound_url, ur.session_id,
+                    envelope.decode("utf-8", errors="replace"))
 
-        # Headers mirror the legacy Utilities.php sendUssdMenuResponse()
-        # exactly: just Content-Type, no SOAPAction. Halotel's spec
+        # no SOAPAction. Halotel's spec
         # doesn't require SOAPAction; legacy never sent it and got
         # errorCode=0 reliably, so we keep parity with that.
         headers = {
@@ -508,6 +514,8 @@ class Halotel:
             return {"error": "transport", "detail": str(exc)[:300]}
 
         body_text = resp.text or ""
+        LOGGER.info("halotel OUTBOUND ACK status=%s transactionid=%s: %s",
+                    resp.status_code, ur.session_id, body_text)
         error_code, parse_err = _parse_outbound_ack(body_text)
         out: dict = {
             "status":         resp.status_code,
