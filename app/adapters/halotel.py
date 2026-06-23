@@ -52,14 +52,20 @@ Outbound requestType selection
 ------------------------------
 
 The wire has 5 outbound types (200/201/202/203/204) — we collapse
-to 4 cases that vary on (first-leg vs subsequent) × (CON vs END):
+to 3 cases that vary on (first-leg-END) × (any-CON) × (subsequent-END):
 
 | Inbound was | Reply action | Outbound `requestType` | Meaning |
 |-------------|--------------|------------------------|---------|
-| `100` (first) | `CON`      | `202`                  | First menu, wait for input |
-| `100` (first) | `END`      | `201`                  | First message, notify + close |
-| `101` (input) | `CON`      | `200`                  | Follow-up menu, wait for input |
+| `100` (first) | `CON`      | `202`                  | Menu requesting input |
+| `100` (first) | `END`      | `201`                  | Notify + close (single-shot) |
+| `101` (input) | `CON`      | `202`                  | Menu requesting input |
 | `101` (input) | `END`      | `203`                  | Last menu, terminate transaction |
+
+Empirically validated 2026-06-23 against the legacy walker logs —
+follow-up "Weka X" prompts (after type=101) push with requestType=202,
+NOT 200. The 200/202 distinction in Halotel's spec table reads like
+both mean "menu requesting input", but only 202 is what's used on the
+wire. 200 is reserved for an edge case we haven't seen in practice.
 
 (`204` "notify mid-tx then close" and `205`/`206` system abort/cancel
 are not yet emitted — extend `_outbound_request_type()` when a
@@ -208,12 +214,13 @@ def _parse_soap(body: bytes) -> dict:
 
 def _outbound_request_type(inbound_type: str, action: Action) -> str:
     """Map (inbound requestType, handler reply action) → outbound type.
-    Defaults bias toward CON=200/END=203 for unknown inbound types —
-    safe degradation: subsequent menu is the more common case."""
-    if inbound_type == "100":
-        return "202" if action == Action.CON else "201"
-    # 101 + anything else (defensive default)
-    return "200" if action == Action.CON else "203"
+    Any CON → 202 (menu requesting input). END after first leg (100) →
+    201 (single-shot notify + close). END after subsequent legs → 203
+    (last menu + terminate). See module docstring for the empirical
+    validation against the legacy walker."""
+    if action == Action.CON:
+        return "202"
+    return "201" if inbound_type == "100" else "203"
 
 
 def _build_outbound_envelope(
