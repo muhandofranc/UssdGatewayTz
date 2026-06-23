@@ -37,7 +37,10 @@ body {
  * + one pseudo) still win over the zebra rule (0,1,3: one pseudo +
  * three element selectors), so hover feedback survives. */
 table thead th {
-  @apply text-slate-700 dark:text-slate-200;
+  /* Light text in both modes — the .bg-brand-header below paints the
+   * thead slate-900 to match the sidebar, so we want nav-style
+   * contrast (slate-200 on slate-900) regardless of theme. */
+  @apply text-slate-200;
 }
 table tbody td {
   @apply text-slate-800 dark:text-slate-100;
@@ -58,4 +61,15 @@ table tbody tr:nth-child(even) {
 /* Subtle brand-tinted hover for nav items in light mode. */
 .brand-nav-hover {
   @apply hover:bg-onfon-red/10 dark:hover:bg-slate-800;
+}
+
+/* Table-header band that mirrors the sidebar nav (bg-slate-900 +
+ * text-slate-200) so headers and the chrome read as one surface. The
+ * onfon-red brand accent then comes through only via the wordmark and
+ * the active-nav pill — tables stay calm.
+ *
+ * Swap on a per-page `<thead>` by setting className="bg-brand-header".
+ * (Replaces the previous `bg-slate-100 dark:bg-slate-800/60`.) */
+.bg-brand-header {
+  @apply bg-slate-900 text-slate-200;
 }

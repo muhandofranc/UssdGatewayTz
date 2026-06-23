@@ -167,7 +167,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
 
       <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
         <table className="min-w-full text-left">
-          <thead className="bg-slate-100 dark:bg-slate-800/60">
+          <thead className="bg-brand-header">
             <tr>
               <th className="px-2 py-1.5 text-xs font-medium w-6" aria-label="expand"></th>
               <th className="px-2 py-1.5 text-xs font-medium">Session ID</th>

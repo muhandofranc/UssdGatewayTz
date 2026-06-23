@@ -132,7 +132,7 @@ export default async function AuditPage({
       {/* ---- Table ---- */}
       <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
         <table className="min-w-full text-left">
-          <thead className="bg-slate-100 dark:bg-slate-800/60">
+          <thead className="bg-brand-header">
             <tr>
               <th className="px-2 py-2 text-xs font-medium">When (UTC)</th>
               <th className="px-2 py-2 text-xs font-medium">Actor</th>
