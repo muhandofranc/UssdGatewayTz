@@ -331,12 +331,13 @@ class Halotel:
         # edge instead (IP whitelist for Halotel's USSDGW source).
         #
         # The user/pass remain in raw_payload so push_outbound() can
-        # pull them when building the outbound envelope. The pass is
-        # redacted in the audit-row copy so it doesn't get persisted
-        # in cleartext via log_leg.
+        # pull them when building the outbound envelope. Redaction of
+        # the pass for DB persistence happens centrally in db.log_leg
+        # via _redact_payload — do NOT overwrite it here, otherwise
+        # push_outbound would POST the redacted string back to Halotel
+        # and trigger errorCode=1 ("User/Pass/IP does not match").
         cfg = self._cfg()
         raw_for_log = dict(fields)
-        raw_for_log["pass"] = "***" if fields["pass"] else ""
 
         sessionid = fields["sessionid"]
         transactionid = fields["transactionid"]

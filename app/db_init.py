@@ -13,7 +13,15 @@ ACCESS EXCLUSIVE lock on `ussd_session_logs` for non-CONCURRENT
 CREATE INDEX statements; two callers in flight at once deadlock
 (`psycopg2.errors.DeadlockDetected` observed 2026-06-23). The
 pg_advisory_lock below serialises callers: only one runs the loop
-at a time, the others wait then no-op through idempotent files.
+at a time, the others wait then fast-path on the `schema_migrations`
+tracking table.
+
+Tracking table: `schema_migrations(filename PRIMARY KEY, applied_at)`
+records which files have run. Before taking the advisory lock we do
+a cheap SELECT — if every db/*.sql filename is already present, we
+skip the lock and the file loop entirely. This is what keeps rebuild
+fast on the 2nd and 3rd container: they spend ~10ms each instead of
+re-executing 17 idempotent DDL files in series behind the lock.
 
 For a real production migration story, swap this for Alembic or
 sqitch later (Phase 4) — this script is just the dev / first-deploy
@@ -67,26 +75,50 @@ def main() -> int:
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
-            # Serialise across containers — see module docstring. The
-            # first caller to arrive runs the loop; the rest block here
-            # until pg_advisory_unlock, then iterate through files that
-            # are now all already-applied (IF NOT EXISTS / ON CONFLICT)
-            # and exit in well under a second.
-            logging.info("acquiring migration lock (key=%s)…",
-                         _MIGRATION_LOCK_KEY)
-            cur.execute("SELECT pg_advisory_lock(%s)",
-                        (_MIGRATION_LOCK_KEY,))
-            logging.info("migration lock acquired")
-            try:
-                for f in files:
-                    path = os.path.join(mdir, f)
-                    logging.info("  applying %s", f)
-                    with open(path, "r", encoding="utf-8") as fh:
-                        sql = fh.read()
-                    cur.execute(sql)
-            finally:
-                cur.execute("SELECT pg_advisory_unlock(%s)",
+            # Tracking table — created outside the advisory lock so the
+            # SELECT below is always against a real table. Idempotent.
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS schema_migrations ("
+                "filename TEXT PRIMARY KEY, "
+                "applied_at TIMESTAMPTZ NOT NULL DEFAULT now())"
+            )
+
+            # Fast path: if every file is already recorded, skip the
+            # lock + loop entirely. Containers 2 and 3 normally land here.
+            cur.execute("SELECT filename FROM schema_migrations")
+            applied = {row[0] for row in cur.fetchall()}
+            pending = [f for f in files if f not in applied]
+            if not pending:
+                logging.info("all %d migration(s) already applied — skipping",
+                             len(files))
+            else:
+                # Serialise across containers — see module docstring.
+                logging.info("acquiring migration lock (key=%s)…",
+                             _MIGRATION_LOCK_KEY)
+                cur.execute("SELECT pg_advisory_lock(%s)",
                             (_MIGRATION_LOCK_KEY,))
+                logging.info("migration lock acquired")
+                try:
+                    # Re-check after acquiring the lock: a sibling
+                    # container may have applied them while we waited.
+                    cur.execute("SELECT filename FROM schema_migrations")
+                    applied = {row[0] for row in cur.fetchall()}
+                    pending = [f for f in files if f not in applied]
+                    logging.info("%d pending after lock", len(pending))
+                    for f in pending:
+                        path = os.path.join(mdir, f)
+                        logging.info("  applying %s", f)
+                        with open(path, "r", encoding="utf-8") as fh:
+                            sql = fh.read()
+                        cur.execute(sql)
+                        cur.execute(
+                            "INSERT INTO schema_migrations (filename) "
+                            "VALUES (%s) ON CONFLICT (filename) DO NOTHING",
+                            (f,),
+                        )
+                finally:
+                    cur.execute("SELECT pg_advisory_unlock(%s)",
+                                (_MIGRATION_LOCK_KEY,))
         logging.info("migrations complete")
     finally:
         conn.close()

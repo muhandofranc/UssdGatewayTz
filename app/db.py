@@ -275,6 +275,22 @@ def expire_active_session(session_id: str, operator_id: int) -> None:
         cur.execute(sql, (session_id, operator_id))
 
 
+# Keys that may carry credentials in raw_*_payload dicts (currently
+# only Halotel's <pass>). Redacted at log_leg persist time so cleartext
+# stays in memory (where push_outbound needs it) and never lands in
+# the ussd_session_logs JSONB columns.
+_SENSITIVE_PAYLOAD_KEYS = frozenset({"pass", "password"})
+
+
+def _redact_payload(p: Optional[dict]) -> Optional[dict]:
+    if not p:
+        return p
+    return {
+        k: ("***" if k in _SENSITIVE_PAYLOAD_KEYS and v else v)
+        for k, v in p.items()
+    }
+
+
 def log_leg(
     *,
     operator_id: int,
@@ -320,8 +336,8 @@ def log_leg(
             cur.execute(sql, (
                 operator_id, operator_name, shortcode_id, service_code,
                 session_id, msisdn, ussd_string, direction,
-                json.dumps(raw_request_payload) if raw_request_payload else None,
-                json.dumps(raw_response_payload) if raw_response_payload else None,
+                json.dumps(_redact_payload(raw_request_payload)) if raw_request_payload else None,
+                json.dumps(_redact_payload(raw_response_payload)) if raw_response_payload else None,
                 handler_url, handler_status_code,
                 handler_response_action, handler_response_text,
                 handler_elapsed_ms, error_class, error_detail,
