@@ -91,6 +91,7 @@ legs from `ussd_active_sessions` — same pattern as Vodacom.
 from __future__ import annotations
 
 import logging
+import re
 import xml.etree.ElementTree as ET
 from typing import Optional
 
@@ -112,6 +113,27 @@ _NS       = {"soap": _SOAP_NS, "t": _TEMPURI}
 # event introduced for Halotel's type=103 ("menu displayed to user")
 # — the pipeline treats it as no-forward, no-expire (the session is
 # still alive, the user is just reading what we sent).
+# Halotel's USSDGW caps outbound <msg> at 182 chars (observed via the
+# `requestType=104` error message: "ussd message is empty or length is
+# larger than the max value(182)"). When exceeded, Halotel discards
+# the push and immediately fires a type=104 timeout to the gateway —
+# the customer never sees the menu. Halotel does NOT render `\n` as a
+# newline on the handset; the legacy walker keeps `<br>` in-message
+# (index_json.php line ~273 emits `str_replace("\r\n", "<br>", …)`)
+# and that's what the wire requires.
+#
+# Halotel's parser also does NOT decode XML entities before measuring
+# the <msg> length — it counts raw bytes between <msg> and </msg>.
+# That means well-formed `&lt;br&gt;` (8 bytes) blows the budget where
+# the legacy walker's malformed-but-accepted literal `<br>` (4 bytes)
+# fits. We emit the envelope with ElementTree (which correctly escapes
+# `<` to `&lt;`) then post-process the literal `<br>` tags back. Other
+# user-provided characters (`&`, `"`, etc.) stay properly escaped —
+# only `<br>` markup is unescaped.
+_HALOTEL_MSG_MAX = 182
+_ESCAPED_BR_RE = re.compile(rb"&lt;\s*br\s*/?\s*&gt;", re.IGNORECASE)
+
+
 _TYPE_EVENT_MAP: dict[str, SessionEvent] = {
     "100": SessionEvent.START,
     "101": SessionEvent.INPUT,
@@ -261,6 +283,10 @@ def _build_outbound_envelope(
         b' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
         b' xmlns:xsd="http://www.w3.org/2001/XMLSchema">',
     )
+    # Unescape <br> markup inside <msg> — Halotel measures raw bytes
+    # and renders literal `<br>`, not `&lt;br&gt;`. See the module-
+    # level comment on _HALOTEL_MSG_MAX for the byte-budget rationale.
+    raw = _ESCAPED_BR_RE.sub(b"<br>", raw)
     return raw
 
 
@@ -482,11 +508,19 @@ class Halotel:
                 ur.session_id,
             )
 
+        msg_out = reply.message or ""
+        if len(msg_out) > _HALOTEL_MSG_MAX:
+            LOGGER.warning(
+                "halotel outbound msg over %d chars (got %d) transactionid=%s — "
+                "Halotel will reject with type=104; shorten menu labels in handler",
+                _HALOTEL_MSG_MAX, len(msg_out), ur.session_id,
+            )
+
         envelope = _build_outbound_envelope(
             out_user=out_user,
             out_pass=out_pass,
             msisdn=ur.msisdn,
-            msg=reply.message,
+            msg=msg_out,
             sessionid=sessionid,
             transactionid=ur.session_id,
             request_type=out_type,
