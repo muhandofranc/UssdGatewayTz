@@ -55,6 +55,14 @@ export function requiredPermFor(pathname: string): PermKey[] | null {
   if (pathname === "/healthz") return null;
   if (pathname.startsWith("/_next/")) return null;
   if (pathname.startsWith("/favicon")) return null;
+  // Integration guide — the handler-URL contract is something
+  // prospective clients need to read BEFORE they have a portal
+  // account, so the route stays open. No DB hit, no per-user state;
+  // the page is a static reference document (moved out of (authed)/
+  // 2026-06-29 for this reason).
+  if (pathname === "/integration" || pathname.startsWith("/integration/")) {
+    return null;
+  }
 
   // Reports + sessions summary — either perm satisfies; the per-row
   // filter is what narrows the result set for `client`. /reports is

@@ -1,22 +1,56 @@
 /**
  * Integration guide — the contract between UssdGatewayTz and a
- * partner's handler URL. Aimed at clients (post-login menu item), so
- * keep it concise: one screen of "what we POST + what you reply" plus
- * a working curl example. The detailed wire spec lives in
- * docs/partner-integration.md; this page mirrors the high-value bits.
+ * partner's handler URL. Aimed at prospective clients (pre-onboarding
+ * reading) AND signed-in operators, so the route is **public**: rbac
+ * marks /integration null in `requiredPermFor`, and the page sits at
+ * the root of `app/` (NOT under (authed)/) so it never hits the
+ * session-redirect in the authed layout.
  *
- * No DB hit, no per-user state — every signed-in user sees the same
- * page. Static-rendered.
+ * No DB hit, no per-user state — content is identical for everyone.
+ * Static-rendered. The lightweight top bar below adapts to session
+ * state so signed-in users have a "Back to dashboard" exit and
+ * anonymous visitors have a "Sign in" CTA.
  */
+import Link from "next/link";
 import { Suspense } from "react";
+
+import { getSession } from "@/lib/auth";
 
 export const metadata = {
   title: "Integration · UssdGatewayTz",
 };
 
-export default function IntegrationPage() {
+export default async function IntegrationPage() {
+  // Best-effort session read — null when the visitor is anonymous.
+  // Page renders identically either way; only the top bar differs.
+  const session = await getSession();
+
   return (
     <Suspense>
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+        {/* Public top bar — replaces the (authed) sidebar we left behind
+            when the page moved out of the group. Keep it intentionally
+            spartan so it doesn't compete with the documentation body. */}
+        <header className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+          <div className="max-w-4xl mx-auto px-6 py-3 flex items-center justify-between">
+            <Link href="/" className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              UssdGatewayTz
+            </Link>
+            {session ? (
+              <Link href="/"
+                    className="text-sm text-onfon-red hover:underline">
+                ← Back to dashboard
+              </Link>
+            ) : (
+              <Link href={`/login?next=/integration`}
+                    className="text-sm rounded-md bg-onfon-red text-white px-3 py-1.5 hover:opacity-90 transition">
+                Sign in
+              </Link>
+            )}
+          </div>
+        </header>
+
+        <main className="max-w-4xl mx-auto px-6 py-8">
       <article className="max-w-4xl space-y-8">
         <header>
           <h1 className="text-2xl font-semibold">Handler integration guide</h1>
@@ -141,6 +175,8 @@ curl -X POST https://your-handler.example/ussd \\
           </ul>
         </Section>
       </article>
+        </main>
+      </div>
     </Suspense>
   );
 }

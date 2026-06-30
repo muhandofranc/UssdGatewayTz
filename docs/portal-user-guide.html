@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UssdGatewayTz — Portal User Guide</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 20mm 16mm;
+    @bottom-center {
+      content: "UssdGatewayTz — Portal User Guide · page " counter(page) " of " counter(pages);
+      font: 10px/1 "Helvetica Neue", Arial, sans-serif;
+      color: #6b7280;
+    }
+  }
+  :root {
+    --red:    #E91E63;
+    --orange: #F7941D;
+    --yellow: #FBC02D;
+    --green:  #43A047;
+    --cyan:   #00ACC1;
+    --blue:   #1E88E5;
+    --violet: #8E24AA;
+    --ink:    #1F1F1F;
+    --slate-900: #0f172a;
+    --slate-700: #334155;
+    --slate-600: #475569;
+    --slate-400: #94a3b8;
+    --slate-200: #e2e8f0;
+    --slate-100: #f1f5f9;
+    --slate-50:  #f8fafc;
+    --brand: linear-gradient(90deg,
+      var(--red) 0%, var(--orange) 18%, var(--yellow) 36%,
+      var(--green) 54%, var(--cyan) 70%, var(--blue) 85%,
+      var(--violet) 100%);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+  h1, h2, h3, h4 { color: var(--slate-900); margin: 1.3em 0 0.4em; }
+  h1 { font-size: 26px; }
+  h2 { font-size: 18px; padding-bottom: 4px; border-bottom: 2px solid var(--slate-200); }
+  h3 { font-size: 14px; color: var(--red); }
+  h4 { font-size: 12px; color: var(--slate-700); }
+  p  { margin: 0.4em 0 0.7em; }
+  code, kbd {
+    font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+    font-size: 10px;
+    background: var(--slate-100);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--slate-700);
+  }
+  ul, ol { margin: 0.3em 0 0.8em 1.4em; padding: 0; }
+  li { margin: 2px 0; }
+  a { color: var(--blue); text-decoration: none; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5em 0 0.9em;
+    page-break-inside: avoid;
+  }
+  thead { background: var(--slate-900); color: var(--slate-200); }
+  th, td {
+    text-align: left;
+    padding: 6px 8px;
+    border: 1px solid var(--slate-200);
+    vertical-align: top;
+  }
+  th { font-weight: 600; font-size: 10px; letter-spacing: 0.02em; text-transform: uppercase; }
+  tbody tr:nth-child(even) { background: var(--slate-50); }
+  .brand-strip { height: 4px; background: var(--brand); border-radius: 2px; }
+  .cover {
+    page-break-after: always;
+    text-align: center;
+    padding-top: 28mm;
+  }
+  .cover .logo {
+    width: 90px; height: 90px;
+    margin: 0 auto 18px;
+    display: block;
+  }
+  .cover h1 {
+    font-size: 36px;
+    margin: 6px 0 4px;
+    background: var(--brand);
+    -webkit-background-clip: text;
+            background-clip: text;
+    color: transparent;
+    font-weight: 700;
+  }
+  .cover .subtitle {
+    font-size: 13px;
+    color: var(--slate-600);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .cover .meta {
+    margin-top: 28mm;
+    font-size: 11px;
+    color: var(--slate-700);
+  }
+  .cover .meta div { margin: 4px 0; }
+  .cover .classification {
+    margin-top: 16mm;
+    font-size: 10px;
+    color: var(--red);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .callout {
+    background: var(--slate-50);
+    border-left: 3px solid var(--red);
+    padding: 8px 12px;
+    margin: 0.6em 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .callout.tip { border-left-color: var(--green); }
+  .callout.warn { border-left-color: var(--orange); }
+  .callout strong { color: var(--slate-900); }
+  .role {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-right: 4px;
+    color: white;
+  }
+  .role.sa     { background: var(--red); }
+  .role.aud    { background: var(--violet); }
+  .role.admin  { background: var(--blue); }
+  .role.viewer { background: var(--slate-600); }
+  .pagebreak { page-break-before: always; }
+  .toc ol { margin-left: 0; padding-left: 1.2em; }
+  .toc li { padding: 3px 0; border-bottom: 1px dotted var(--slate-200); }
+  .toc li a { color: var(--slate-700); }
+  .toc li a strong { color: var(--slate-900); }
+  .small { font-size: 10px; color: var(--slate-600); }
+  .kbd-row { display: inline-block; margin-right: 6px; }
+  figure {
+    margin: 0.8em 0;
+    border: 1px solid var(--slate-200);
+    border-radius: 6px;
+    overflow: hidden;
+    page-break-inside: avoid;
+  }
+  figure figcaption {
+    background: var(--slate-100);
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--slate-600);
+    border-bottom: 1px solid var(--slate-200);
+  }
+  figure pre {
+    margin: 0;
+    padding: 8px 12px;
+    font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+    font-size: 10px;
+    background: white;
+    overflow-x: auto;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================== COVER ============================== -->
+<section class="cover">
+  <div class="brand-strip" style="width:60%; margin:0 auto 28px;"></div>
+  <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <rect width="64" height="64" rx="10" fill="#ffffff"/>
+    <ellipse cx="32" cy="32" rx="22" ry="28" fill="none" stroke="#111111" stroke-width="3"/>
+    <ellipse cx="32" cy="32" rx="17" ry="22.5" fill="none" stroke="#E62524" stroke-width="6"/>
+    <ellipse cx="32" cy="32" rx="11" ry="15" fill="none" stroke="#111111" stroke-width="1.5"/>
+    <ellipse cx="32" cy="32" rx="6" ry="9" fill="#E62524"/>
+  </svg>
+  <h1>UssdGatewayTz</h1>
+  <div class="subtitle">Operator Portal — User Guide</div>
+
+  <div class="meta">
+    <div><strong>Version:</strong> 1.0</div>
+    <div><strong>Audience:</strong> Portal users (Super&nbsp;Admin, Auditor, Admin/Client, Viewer)</div>
+    <div><strong>Owner:</strong> UssdGatewayTz operations team</div>
+  </div>
+
+  <div class="classification">Classified as Confidential — Business Partner</div>
+</section>
+
+<!-- ============================== TOC ============================== -->
+<section class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#about"><strong>About the portal</strong> — what it is and when to use it</a></li>
+    <li><a href="#roles"><strong>Roles &amp; permissions</strong> — who can see and do what</a></li>
+    <li><a href="#access"><strong>Getting in</strong> — URL, sign-in, password reset, signing out</a></li>
+    <li><a href="#nav"><strong>Around the screen</strong> — sidebar, top bar, filters, themes</a></li>
+    <li><a href="#overview"><strong>Overview</strong> — the landing dashboard</a></li>
+    <li><a href="#summary"><strong>Reports Summary</strong> — pre-aggregated daily roll-ups</a></li>
+    <li><a href="#sessions"><strong>Sessions</strong> — one row per USSD session</a></li>
+    <li><a href="#reports"><strong>Session Hops</strong> — per-leg detail</a></li>
+    <li><a href="#exports"><strong>Download Exports</strong> — large-volume CSV jobs</a></li>
+    <li><a href="#integration"><strong>Integration Document</strong> — handler-URL contract for partners</a></li>
+    <li><a href="#admin"><strong>Admin pages</strong> — Shortcodes, Operators, Portal users, Audit log</a></li>
+    <li><a href="#tasks"><strong>Common tasks</strong> — step-by-step recipes</a></li>
+    <li><a href="#troubleshoot"><strong>Troubleshooting</strong> — what to do when something looks off</a></li>
+    <li><a href="#glossary"><strong>Glossary</strong> — terms used in the portal</a></li>
+  </ol>
+</section>
+
+<!-- ============================== 1 ============================== -->
+<section class="pagebreak">
+<h2 id="about">1. About the portal</h2>
+<p>
+The <strong>UssdGatewayTz operator portal</strong> is the web UI on top of the USSD gateway. It lets you watch traffic in flight, drill into individual sessions, audit operator behaviour, manage shortcode routing, and grant other people access. The data shown here is the same data the gateway logs to its database — there is nothing live-faked.
+</p>
+<p>What you can do with the portal depends on your <em>role</em> (see <a href="#roles">section&nbsp;2</a>). Most users land on <strong>Overview</strong>, drill into <strong>Sessions</strong> or <strong>Session Hops</strong>, and (occasionally) queue an export. Super Admins additionally manage shortcodes, operators, and other portal users.</p>
+
+<div class="callout tip">
+  <strong>Tip — the portal never modifies USSD traffic.</strong> Everything on the read side is a query against an audit table; everything on the write side (shortcodes, operators, users) reconfigures <em>routing</em>, not customer sessions.
+</div>
+
+<!-- ============================== 2 ============================== -->
+<h2 id="roles">2. Roles &amp; permissions</h2>
+<p>The portal recognises four roles. Each has a different sidebar; you see only the routes your role can reach.</p>
+
+<table>
+  <thead>
+    <tr><th>Role</th><th>Best for</th><th>Can read</th><th>Can change</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="role sa">Super Admin</span></td>
+      <td>Operations lead, gateway maintainer</td>
+      <td>Every page, every shortcode, every session, every audit row</td>
+      <td>Shortcodes, operators, all portal users, exports</td>
+    </tr>
+    <tr>
+      <td><span class="role aud">Auditor</span></td>
+      <td>Compliance, security review</td>
+      <td>Same read scope as Super Admin (all shortcodes, all users) <em>plus</em> the audit log</td>
+      <td>Nothing — write actions are blocked even though the list pages render</td>
+    </tr>
+    <tr>
+      <td><span class="role admin">Admin (Client)</span></td>
+      <td>Shortcode owner; the partner running a service code</td>
+      <td>Reports, sessions, and exports for <em>their own</em> shortcodes only</td>
+      <td>One viewer per Admin account (read-only delegate on their shortcodes)</td>
+    </tr>
+    <tr>
+      <td><span class="role viewer">Viewer</span></td>
+      <td>Helpdesk / second-pair-of-eyes on an Admin's shortcodes</td>
+      <td>Reports, sessions, and exports for the shortcodes their Admin granted them</td>
+      <td>Nothing</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="small">Under the hood: roles are seeded in <code>db/001_init.sql</code> and <code>db/010_roles_auditor_viewer.sql</code>. Permission keys are listed in <code>dashboard/src/lib/rbac.ts</code>.</p>
+
+<div class="callout warn">
+  <strong>Why two read-only roles?</strong> Auditor reads <em>globally</em>; Viewer reads only the shortcodes its Admin explicitly granted. An Auditor sees every customer's session; a Viewer sees only what their client allowed.
+</div>
+
+<!-- ============================== 3 ============================== -->
+<h2 id="access">3. Getting in</h2>
+
+<h3>3.1 URL</h3>
+<p>The portal is served from the gateway's host on Kong's HTTPS port (the same host that handles USSD inbound). Your Super Admin will share the exact URL — typically:</p>
+<figure><figcaption>Example URL</figcaption><pre>https://&lt;portal-host&gt;/login</pre></figure>
+
+<h3>3.2 Sign in</h3>
+<p>Enter your <strong>email</strong> and <strong>password</strong>. After six failed attempts in a row you are locked out for 30 minutes — wait it out or ask a Super Admin to clear the lock.</p>
+
+<h3>3.3 Forgot password</h3>
+<p>The login screen has a <em>Forgot password?</em> link. The portal sends a one-time reset link to your registered email; the link expires in 30 minutes. If your email is wrong, only a Super Admin can change it.</p>
+
+<h3>3.4 First-time login</h3>
+<p>If you were just created, the Super Admin will have either (a) emailed you a setup link, or (b) handed you a temporary password. In case (b), change it immediately from the user-detail page (<code>Portal users → me</code>).</p>
+
+<h3>3.5 Signing out</h3>
+<p>Top-right of the topbar. Sign out on shared machines — sessions last 8 hours by default.</p>
+
+<!-- ============================== 4 ============================== -->
+<h2 id="nav">4. Around the screen</h2>
+
+<h3>4.1 Sidebar</h3>
+<p>The dark left rail lists every page your role can reach. The active page is highlighted in red. The sidebar is collapsible on mobile (top-right menu icon).</p>
+
+<h3>4.2 Top bar</h3>
+<p>Shows your name, role, and the sign-out button on the right. On mobile, navigation collapses into the top bar.</p>
+
+<h3>4.3 Filter bar</h3>
+<p>Reports, Sessions, Session Hops and Summary share a filter strip:</p>
+<ul>
+  <li><strong>MNO</strong> — Vodacom, Airtel, Tigo, Halotel (the operators known to the gateway).</li>
+  <li><strong>Range</strong> — Today, Last 24h, Last 7d, This month, or a custom date range.</li>
+  <li><strong>Shortcode</strong> — restrict to one of the codes you own / can see.</li>
+  <li><strong>Search</strong> (where applicable) — substring match on MSISDN, session ID, or USSD trail.</li>
+</ul>
+<p>Filters are <em>sticky</em>: changing the range on Sessions carries through if you click into Session Hops.</p>
+
+<h3>4.4 Light / dark theme</h3>
+<p>Theme toggle is in the top bar. The choice is saved in your browser (no server round-trip).</p>
+
+<!-- ============================== 5 ============================== -->
+<h2 id="overview" class="pagebreak">5. Overview</h2>
+<p>The default landing page. Headline numbers (today's session count, success rate, average duration) for the shortcodes you have access to, plus a small bar chart of the last few days. Use it as a glance; click any tile or "View all" link to jump into the underlying list.</p>
+<p>Visible to: every role.</p>
+
+<h2 id="summary">6. Reports Summary</h2>
+<p>Pre-aggregated daily roll-up. Each row is one operator × one shortcode × one day, with columns for total sessions, completed sessions, billable sessions, average duration, and error counts. Backed by the materialised view <code>daily_session_summary</code> (refreshed nightly) plus the in-flight <code>today_session_summary_mv</code>.</p>
+<ul>
+  <li>Cheapest page to look at; loads even on a year of data.</li>
+  <li>Use this for monthly billing reconciliation.</li>
+  <li>Click a row to open Sessions filtered to that operator + shortcode + day.</li>
+</ul>
+
+<h2 id="sessions">7. Sessions</h2>
+<p>One row per <em>USSD session</em> (one customer dial). Columns include session ID, MNO, shortcode, MSISDN, started/ended, duration, leg count, outcome (END/timeout/cancelled), the USSD trail (menu path the customer took) and a billable-sessions counter for the MNO's billing window.</p>
+<ul>
+  <li>Expand any row to see all hops in chronological order without leaving the page.</li>
+  <li>Use the search to find a specific customer by MSISDN or a complaint case by session ID.</li>
+  <li>"Billable Sessions" applies the MNO's billing-window rule (e.g. Vodacom's 20-second rolling window).</li>
+</ul>
+
+<h2 id="reports">8. Session Hops</h2>
+<p>One row per HTTP leg the gateway processed — the most granular view. Useful for diagnosing a specific failure (what the handler returned, what the gateway sent back to the MNO, how long each leg took, whether it timed out).</p>
+<div class="callout">
+  Typical workflow: a customer complains → look up their session on <strong>Sessions</strong> → expand it OR jump to <strong>Session Hops</strong> with the session ID prefilled → identify the failing leg.
+</div>
+
+<h2 id="exports" class="pagebreak">9. Download Exports</h2>
+<p>For data volumes too large to scroll. Queue a CSV export filtered by date range, MNO, shortcode, and outcome; the export runs in the background and a row appears with status <em>queued → running → ready</em>. Click the link to download. Exports expire after seven days.</p>
+<ul>
+  <li>Each export carries the filter set that produced it — re-runnable from the same row.</li>
+  <li>Export size and row count are shown so you know the file is plausible before downloading.</li>
+  <li>You only see your own exports. Super Admin sees everyone's.</li>
+</ul>
+
+<h2 id="integration">10. Integration Document</h2>
+<p>Reference for partners who own the handler URL configured against a shortcode. Documents the unified JSON contract the gateway POSTs (msisdn, session_id, service_code, ussd_string, event, raw_payload) and what to return (<code>CON …</code> for "continue, prompt for input", <code>END …</code> for "terminate"). MNO-specific quirks (Halotel async, Tigo aggregator shapes) are called out per-section.</p>
+
+<!-- ============================== 11 ============================== -->
+<h2 id="admin">11. Admin pages</h2>
+
+<h3>11.1 Shortcodes <span class="role sa">Super Admin</span> <span class="role aud">Auditor (read-only)</span></h3>
+<p>The routing table — one row per (operator, code). Columns: operator, code, label, owner (a portal user), handler URL, auth mode, status (active / maintenance / deactivated), and timestamps. Click a row to edit; click "New shortcode" to add one. The Status column controls customer behaviour:</p>
+<table>
+  <thead><tr><th>Status</th><th>What the customer sees</th></tr></thead>
+  <tbody>
+    <tr><td>active</td><td>Normal flow — the gateway calls the handler URL.</td></tr>
+    <tr><td>maintenance</td><td>An END message ("Service under maintenance"), no handler call.</td></tr>
+    <tr><td>deactivated</td><td>An END message ("Service unavailable"), no handler call.</td></tr>
+  </tbody>
+</table>
+
+<h3>11.2 Operators <span class="role sa">Super Admin</span> <span class="role aud">Auditor (read-only)</span></h3>
+<p>Catalogue of the MNOs the gateway recognises (vodacom, airtel, tigo, halotel by default). Toggle <em>active</em> to take a whole MNO offline (useful in incident-response). The display name is what the dashboard shows; the canonical name is what the gateway routes by.</p>
+
+<h3>11.3 My shortcodes <span class="role admin">Admin (Client)</span></h3>
+<p>The Admin's home for the shortcodes they own. Shows traffic stats per shortcode and links to the related Sessions / Session Hops filtered to that code. Admins manage their viewer from here — see <a href="#tasks">section&nbsp;12.2</a>.</p>
+
+<h3>11.4 Portal users</h3>
+<p>Behaviour depends on role:</p>
+<ul>
+  <li><span class="role sa">Super Admin</span> — full CRUD over every portal user; assign role; activate/deactivate.</li>
+  <li><span class="role aud">Auditor</span> — read-only list of all users.</li>
+  <li><span class="role admin">Admin (Client)</span> — manages a single Viewer scoped to their own shortcodes (max one per Admin).</li>
+</ul>
+<div class="callout warn">
+  <strong>You cannot deactivate the last active Super Admin.</strong> The portal blocks the action to avoid locking everyone out.
+</div>
+
+<h3>11.5 Audit log <span class="role sa">Super Admin</span> <span class="role aud">Auditor</span></h3>
+<p>Append-only record of every privileged action: logins, password resets, shortcode edits, user changes, role swaps, exports queued, etc. Each row carries timestamp, actor, action, target, outcome (success/failure/denied), source IP, and a JSONB <em>detail</em> blob with the before/after where relevant.</p>
+
+<!-- ============================== 12 ============================== -->
+<h2 id="tasks" class="pagebreak">12. Common tasks</h2>
+
+<h3>12.1 Find why a customer's session failed</h3>
+<ol>
+  <li>Ask the customer for their phone number or the time the call was made.</li>
+  <li>Go to <strong>Sessions</strong>, set the date filter to that day, search by MSISDN.</li>
+  <li>Click the matching row to expand the hops — look for the leg with a non-success status or non-zero <em>error_class</em>.</li>
+  <li>If you need raw payloads, click into <strong>Session Hops</strong> from the expanded row.</li>
+</ol>
+
+<h3>12.2 Add a Viewer to your own shortcode (Admin)</h3>
+<ol>
+  <li>Open <strong>Portal users</strong>.</li>
+  <li>Click <em>Add viewer</em> — fill in name + email; the portal sends them a setup email.</li>
+  <li>On the viewer's row, select which of your shortcodes they may see.</li>
+  <li>Save. The viewer's access is live on their next login.</li>
+</ol>
+<p>You can edit the granted-shortcodes list at any time, deactivate the viewer, or delete the row to revoke access entirely.</p>
+
+<h3>12.3 Queue a CSV export</h3>
+<ol>
+  <li>From <strong>Sessions</strong> or <strong>Session Hops</strong>, set the filter you want.</li>
+  <li>Click <em>Export</em> in the toolbar — the page redirects to <strong>Download Exports</strong> with a row in status <em>queued</em>.</li>
+  <li>Wait — the row flips to <em>ready</em> when finished (typical: under a minute for &lt; 100&nbsp;000 rows).</li>
+  <li>Click the file name to download. The file expires after seven days.</li>
+</ol>
+
+<h3>12.4 Take a shortcode into maintenance</h3>
+<ol>
+  <li>Open <strong>Shortcodes</strong>, click the row.</li>
+  <li>Change <em>Status</em> to <em>maintenance</em>; optionally edit the maintenance message customers will see.</li>
+  <li>Save. Effect is immediate — the next inbound USSD on that code returns the maintenance END.</li>
+  <li>Reverse by setting <em>Status</em> back to <em>active</em>.</li>
+</ol>
+
+<h3>12.5 Disable a user temporarily</h3>
+<ol>
+  <li><strong>Portal users</strong> → the user's row → toggle <em>Active</em> off.</li>
+  <li>The user's existing session is invalidated within seconds; they cannot sign in again until reactivated.</li>
+</ol>
+
+<h3>12.6 Change your own password</h3>
+<ol>
+  <li>Click your name in the top bar → <em>My profile</em> (or open <strong>Portal users</strong> → click your own row).</li>
+  <li>Use the <em>Change password</em> action. Minimum length 12 characters; the form will tell you if it's weak.</li>
+</ol>
+
+<!-- ============================== 13 ============================== -->
+<h2 id="troubleshoot">13. Troubleshooting</h2>
+
+<table>
+  <thead><tr><th>Symptom</th><th>What to check</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Login fails with "invalid credentials"</td>
+      <td>Caps lock, browser auto-fill stale; after 6 misses you are locked out 30 min. Forgot password as a last resort.</td>
+    </tr>
+    <tr>
+      <td>"You don't have permission"</td>
+      <td>The route requires a role/permission your account lacks. Ask a Super Admin to confirm your role.</td>
+    </tr>
+    <tr>
+      <td>A shortcode is missing from the dropdown</td>
+      <td>Only shortcodes you own (Admin) or have been granted (Viewer) appear. Super Admin / Auditor see all.</td>
+    </tr>
+    <tr>
+      <td>Export stuck in "queued"</td>
+      <td>The export worker may be down — flag a Super Admin. Re-queueing won't help if the worker is the issue.</td>
+    </tr>
+    <tr>
+      <td>Counts look smaller than expected</td>
+      <td>Sessions over a week old may have been moved to the <em>archive</em> partition — filter range covers the date window of interest.</td>
+    </tr>
+    <tr>
+      <td>"Method not allowed" returned by <code>/ussd/</code> when you paste it in a browser</td>
+      <td>That endpoint is for MNO POSTs, not interactive use. It's expected.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="glossary" class="pagebreak">14. Glossary</h2>
+<table>
+  <tbody>
+    <tr><td><strong>Aggregator</strong></td><td>The MNO-side appliance that forwards USSD traffic into the gateway over HTTPS.</td></tr>
+    <tr><td><strong>Billable session</strong></td><td>Sessions counted under an MNO's billing-window rule (e.g. Vodacom's 20-second rolling window) — used for invoicing.</td></tr>
+    <tr><td><strong>CON / END</strong></td><td>The two action verbs in a handler reply. CON means "more input expected — keep the session open". END terminates the session.</td></tr>
+    <tr><td><strong>Handler URL</strong></td><td>The HTTP endpoint the gateway POSTs to for a given shortcode. Owned by the partner running the service.</td></tr>
+    <tr><td><strong>Hop / Leg</strong></td><td>One HTTP round-trip in a session. A typical session has 2–6 hops.</td></tr>
+    <tr><td><strong>MNO</strong></td><td>Mobile Network Operator. The gateway speaks Vodacom, Airtel, Tigo and Halotel.</td></tr>
+    <tr><td><strong>MSISDN</strong></td><td>The customer's phone number in E.164 format (e.g. 255712345678).</td></tr>
+    <tr><td><strong>Service code</strong></td><td>The USSD code the customer dialled, e.g. <code>*147*03#</code>.</td></tr>
+    <tr><td><strong>Session</strong></td><td>One customer dial, from first leg until the handler ends or the MNO times out.</td></tr>
+    <tr><td><strong>Shortcode</strong></td><td>The gateway's routing-table row that ties (operator, service code) to a handler URL.</td></tr>
+    <tr><td><strong>USSD trail</strong></td><td>The path of menu choices a customer made, written as <code>1*2*3</code> meaning "selected 1, then 2, then 3".</td></tr>
+  </tbody>
+</table>
+
+<div class="callout tip" style="margin-top:24px;">
+  <strong>Need more help?</strong> The runbooks live in the project repo under <code>docs/</code> (architecture, MNO specifics, partner integration). For account issues contact your Super Admin; for bugs, file an issue with a screenshot, the date/time, and the affected session ID.
+</div>
+</section>
+
+</body>
+</html>
