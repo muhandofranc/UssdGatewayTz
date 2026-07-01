@@ -288,10 +288,25 @@ export async function loadLegsForSession(
   sessionId: string,
   operatorName: string,
   allowedShortcodeIds: number[] | null,
+  firstTs?: string,
+  lastTs?: string,
 ): Promise<SessionLeg[]> {
   // Build a where clause that pins session_id + operator + the
   // user's shortcode allowlist. We DON'T reuse buildWhere because
   // we want a far narrower predicate (no date range, no filters).
+  //
+  // `firstTs` / `lastTs` come from the parent SessionRow — the
+  // caller already knows the session's time bracket. Passing them
+  // through enables PARTITION PRUNING: ussd_session_logs is
+  // partitioned by ts (db/004 + db/014), so without a ts predicate
+  // PG has to scan every partition looking for session_id, which
+  // easily blows the 30s DASHBOARD_PG_QUERY_TIMEOUT_MS on a busy
+  // gateway.
+  //
+  // We widen the bracket by a small buffer on both ends to catch
+  // late-arriving legs whose ts drifted past `last_ts` (e.g. an
+  // async_outbound row that was still in flight when the parent
+  // aggregation ran).
   const conds: string[] = [
     "session_id = $1",
     "operator_name = $2",
@@ -301,6 +316,14 @@ export async function loadLegsForSession(
     if (allowedShortcodeIds.length === 0) return [];
     params.push(allowedShortcodeIds);
     conds.push(`shortcode_id = ANY($${params.length}::int[])`);
+  }
+  if (firstTs) {
+    params.push(firstTs);
+    conds.push(`ts >= ($${params.length}::timestamptz - interval '5 minutes')`);
+  }
+  if (lastTs) {
+    params.push(lastTs);
+    conds.push(`ts <= ($${params.length}::timestamptz + interval '5 minutes')`);
   }
   const r = await query<SessionLeg>(
     `SELECT id::text, ts::text, msisdn, direction,

@@ -213,10 +213,22 @@ services:
       NODE_ENV: production
     volumes:
       - ussd_exports:/exports
-    # Worker has no HTTP surface — no port, no healthcheck. A crashed
-    # worker is caught by `restart: unless-stopped`; a stuck worker
-    # is caught by the reaper's "zombie job" query flipping stalled
-    # 'running' rows back to 'queued' after REAP_AFTER_SECONDS.
+    # The dashboard image bakes a `HEALTHCHECK wget /api/health` in its
+    # Dockerfile (line 81). That probe is meaningful for the receiver
+    # container but always fails on the worker — the worker doesn't
+    # run Next.js and has nothing on :3000. Without disabling it, the
+    # worker shows up as `Up (unhealthy)` and any compose commands
+    # that gate on health (e.g. `--wait`) hang forever.
+    #
+    # `disable: true` at the compose layer overrides the image's
+    # HEALTHCHECK by emitting `HEALTHCHECK NONE` at container create.
+    #
+    # Liveness is instead delegated to `restart: unless-stopped` for
+    # crashes and the worker's own reaper query (flips zombie
+    # 'running' rows back to 'queued' after REAP_AFTER_SECONDS) for
+    # stuck jobs.
+    healthcheck:
+      disable: true
     command: ["node", "worker/exports_worker.mjs"]
 
 # Named volume shared between the dashboard (writes the file path

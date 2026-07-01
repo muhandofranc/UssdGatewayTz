@@ -19,9 +19,18 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const sessionId = (url.searchParams.get("session_id") || "").trim();
   const operator  = (url.searchParams.get("operator") || "").trim().toLowerCase();
+  // `first_ts` and `last_ts` are OPTIONAL — but supplying them turns
+  // a full-partition-scan into a 1-2-partition-scan by unlocking
+  // the ts-based partition pruner in Postgres. The frontend always
+  // has these values in the parent SessionRow, so callers that
+  // omit them are anonymous-testing / curl only.
+  const firstTs = (url.searchParams.get("first_ts") || "").trim() || undefined;
+  const lastTs  = (url.searchParams.get("last_ts")  || "").trim() || undefined;
   if (!sessionId || !operator) {
     return NextResponse.json({ error: "session_id and operator required" }, { status: 400 });
   }
-  const legs = await loadLegsForSession(sessionId, operator, session.shortcodeIds);
+  const legs = await loadLegsForSession(
+    sessionId, operator, session.shortcodeIds, firstTs, lastTs,
+  );
   return NextResponse.json({ legs });
 }

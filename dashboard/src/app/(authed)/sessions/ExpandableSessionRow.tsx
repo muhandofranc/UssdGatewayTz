@@ -128,8 +128,13 @@ export default function ExpandableSessionRow({ row }: { row: SessionRow }) {
     if (legsState.kind !== "idle") return;   // already loaded / loading / errored
     setLegsState({ kind: "loading" });
     try {
+      // Send `first_ts` + `last_ts` so the backend can prune the
+      // ts-partitioned scan (see loadLegsForSession comment). Without
+      // these the query timed out at 30s on busy gateways.
       const url = `/api/sessions/legs?session_id=${encodeURIComponent(row.session_id)}`
-                + `&operator=${encodeURIComponent(row.operator_name)}`;
+                + `&operator=${encodeURIComponent(row.operator_name)}`
+                + `&first_ts=${encodeURIComponent(row.first_ts)}`
+                + `&last_ts=${encodeURIComponent(row.last_ts)}`;
       const resp = await fetch(url, { credentials: "same-origin" });
       if (!resp.ok) {
         setLegsState({ kind: "error", message: `HTTP ${resp.status}` });
