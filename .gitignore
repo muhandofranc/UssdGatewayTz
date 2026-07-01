@@ -1,5 +1,6 @@
 # Local docker env — secrets. Never commit.
 .env
+docker-compose.yml
 
 # Python
 __pycache__/

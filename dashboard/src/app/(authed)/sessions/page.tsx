@@ -85,6 +85,27 @@ function buildQs(sp: Awaited<PageProps["searchParams"]>, overrides: Record<strin
 
 /* ---------- page --------------------------------------------- */
 
+/** PG error code for `canceling statement due to statement timeout`.
+ *  Distinguishes "your filter is too wide" from real bugs — we catch
+ *  57014 in the page render and surface a friendly explanation; every
+ *  other error re-throws through the App Router's error boundary. */
+const PG_STATEMENT_TIMEOUT = "57014";
+
+function daysBetween(a?: string, b?: string): number {
+  if (!a || !b) return 0;
+  const ms = new Date(b).getTime() - new Date(a).getTime();
+  return Math.max(0, Math.floor(ms / (24 * 3600 * 1000))) + 1;
+}
+
+/** Sentinel rendered when the query timed out — see the try/catch
+ *  around `Promise.all` for the timing details. */
+type QueryTimeout = { __timeout: true; windowDays: number };
+function isTimeout<T>(v: T | QueryTimeout): v is QueryTimeout {
+  return typeof v === "object" && v !== null
+    && (v as QueryTimeout).__timeout === true;
+}
+
+
 export default async function SessionsPage({ searchParams }: PageProps) {
   const session = await getSession();
   if (!session) return null;
@@ -93,16 +114,78 @@ export default async function SessionsPage({ searchParams }: PageProps) {
   const filters = parseFilters(sp);
   const page = asPositiveInt(sp.page, 1);
   const pageSize = asPositiveInt(sp.page_size, 10, 100);
+  const windowDays = daysBetween(filters.fromTs, filters.toTs);
 
-  const [pageResult, summary, shortcodeOpts] = await Promise.all([
-    loadSessionPage(filters, session.shortcodeIds, page, pageSize),
-    loadBillableSummary(filters, session.shortcodeIds),
-    loadShortcodeOptions(session.shortcodeIds),
-  ]);
+  // Catch statement-timeout (PG error 57014) so a filter that's too
+  // wide surfaces a friendly explanation instead of the App Router's
+  // generic "Application error" crash boundary. Any OTHER error is
+  // re-thrown — those are genuine bugs and should surface loudly.
+  //
+  // The shortcode-options query is CHEAP (catalog lookup, no legs)
+  // so we fetch it inside the try but recover on its own if it
+  // was the only casualty.
+  let pageResult: Awaited<ReturnType<typeof loadSessionPage>> | QueryTimeout;
+  let summary:    Awaited<ReturnType<typeof loadBillableSummary>> | QueryTimeout;
+  let shortcodeOpts: Awaited<ReturnType<typeof loadShortcodeOptions>> = [];
+  try {
+    [pageResult, summary, shortcodeOpts] = await Promise.all([
+      loadSessionPage(filters, session.shortcodeIds, page, pageSize),
+      loadBillableSummary(filters, session.shortcodeIds),
+      loadShortcodeOptions(session.shortcodeIds),
+    ]);
+  } catch (e) {
+    const code = (e as { code?: string })?.code;
+    if (code !== PG_STATEMENT_TIMEOUT) throw e;
+    shortcodeOpts = await loadShortcodeOptions(session.shortcodeIds).catch(() => []);
+    pageResult = { __timeout: true, windowDays };
+    summary    = { __timeout: true, windowDays };
+  }
 
-  const totalPages = Math.max(1, Math.ceil(pageResult.totalKnown / pageSize));
-  const fromIdx = pageResult.rows.length ? (page - 1) * pageSize + 1 : 0;
-  const toIdx = (page - 1) * pageSize + pageResult.rows.length;
+  if (isTimeout(pageResult)) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-baseline justify-between gap-4">
+          <h1 className="text-2xl font-semibold">Sessions</h1>
+        </div>
+        <Filters
+          defaults={filters}
+          pageSize={pageSize}
+          shortcodeOptions={shortcodeOpts}
+          action="/sessions"
+        />
+        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 p-4 text-sm">
+          <p className="font-medium text-amber-900 dark:text-amber-100">
+            Filter is too wide — Postgres cancelled the query at 30&nbsp;seconds.
+          </p>
+          <p className="mt-2 text-amber-900 dark:text-amber-200">
+            You asked for {windowDays}&nbsp;days of per-session detail. The
+            per-session view has to touch every leg in that window; at gateway
+            scale that easily blows the query-timeout cap.
+          </p>
+          <ul className="mt-2 list-disc pl-5 text-amber-900 dark:text-amber-200">
+            <li>Narrow the date range to 7&nbsp;days or fewer, OR</li>
+            <li>Add an operator + shortcode filter to reduce the row set, OR</li>
+            <li>Use&nbsp;
+              <Link href={`/summary${sp.from || sp.to ? "?" : ""}${sp.from ? `from=${sp.from}` : ""}${sp.from && sp.to ? "&" : ""}${sp.to ? `to=${sp.to}` : ""}`}
+                    className="underline font-medium">Reports&nbsp;Summary</Link>
+              &nbsp;for aggregate views over long windows (backed by the
+              nightly rollup — sub-second even on 30&nbsp;days).
+            </li>
+          </ul>
+        </div>
+      </div>
+    );
+  }
+  // TS narrowing — past the `isTimeout` early-return above, both
+  // values are their real result types. We shadow the union locals
+  // with concrete-typed constants so the rest of the render doesn't
+  // need to case-split every access.
+  const pageResultOk = pageResult as Awaited<ReturnType<typeof loadSessionPage>>;
+  const summaryOk    = summary    as Awaited<ReturnType<typeof loadBillableSummary>>;
+
+  const totalPages = Math.max(1, Math.ceil(pageResultOk.totalKnown / pageSize));
+  const fromIdx = pageResultOk.rows.length ? (page - 1) * pageSize + 1 : 0;
+  const toIdx = (page - 1) * pageSize + pageResultOk.rows.length;
 
   return (
     <div className="space-y-6">
@@ -124,7 +207,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-        {summary.per_operator.map((op) => (
+        {summaryOk.per_operator.map((op) => (
           <div key={op.operator_name}
                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2">
             <div className="flex items-baseline justify-between">
@@ -147,7 +230,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
         ))}
         <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-300">total sessions</div>
-          <div className="text-lg font-semibold tabular-nums">{summary.total_billable_units.toLocaleString()}</div>
+          <div className="text-lg font-semibold tabular-nums">{summaryOk.total_billable_units.toLocaleString()}</div>
           <div className="text-[10px] text-amber-700/80 dark:text-amber-300/80">across all MNOs</div>
         </div>
       </div>
@@ -156,11 +239,11 @@ export default async function SessionsPage({ searchParams }: PageProps) {
       <Filters defaults={filters} pageSize={pageSize} shortcodeOptions={shortcodeOpts} action="/sessions" />
 
       <div className="text-sm text-slate-500">
-        {pageResult.totalKnown === 0
+        {pageResultOk.totalKnown === 0
           ? "No matching sessions."
           : <>
               Showing <span className="font-mono">{fromIdx.toLocaleString()}–{toIdx.toLocaleString()}</span>
-              {" "}of <span className="font-mono">{fmtCount(pageResult.totalKnown, pageResult.totalCapped)}</span>
+              {" "}of <span className="font-mono">{fmtCount(pageResultOk.totalKnown, pageResultOk.totalCapped)}</span>
               {" "}session(s)
             </>}
       </div>
@@ -184,10 +267,10 @@ export default async function SessionsPage({ searchParams }: PageProps) {
             </tr>
           </thead>
           <tbody>
-            {pageResult.rows.map((r) =>
+            {pageResultOk.rows.map((r) =>
               <ExpandableSessionRow key={`${r.operator_name}:${r.session_id}`} row={r} />
             )}
-            {pageResult.rows.length === 0 ? (
+            {pageResultOk.rows.length === 0 ? (
               <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={12}>
                 No sessions match the current filters.
               </td></tr>
@@ -196,7 +279,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
         </table>
       </div>
 
-      {pageResult.totalKnown > pageSize ? (
+      {pageResultOk.totalKnown > pageSize ? (
         <div className="flex items-center gap-2 text-sm">
           <Link
             href={`/sessions${buildQs(sp, { page: String(Math.max(1, page - 1)) })}`}
@@ -205,11 +288,11 @@ export default async function SessionsPage({ searchParams }: PageProps) {
             ← Prev
           </Link>
           <span className="text-slate-500">
-            Page <span className="font-mono">{page}</span> of <span className="font-mono">{pageResult.totalCapped ? `${totalPages}+` : totalPages}</span>
+            Page <span className="font-mono">{page}</span> of <span className="font-mono">{pageResultOk.totalCapped ? `${totalPages}+` : totalPages}</span>
           </span>
           <Link
             href={`/sessions${buildQs(sp, { page: String(page + 1) })}`}
-            className={`rounded-md border border-slate-300 dark:border-slate-700 px-3 py-1 ${page >= totalPages && !pageResult.totalCapped ? "pointer-events-none opacity-40" : ""}`}
+            className={`rounded-md border border-slate-300 dark:border-slate-700 px-3 py-1 ${page >= totalPages && !pageResultOk.totalCapped ? "pointer-events-none opacity-40" : ""}`}
           >
             Next →
           </Link>
