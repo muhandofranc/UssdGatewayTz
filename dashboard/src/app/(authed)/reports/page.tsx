@@ -75,9 +75,16 @@ function isPgTimeoutError(e: unknown): boolean {
       || /Query read timeout/i.test(message);
 }
 
-function daysBetween(a?: string, b?: string): number {
-  if (!a || !b) return 0;
-  const ms = new Date(b).getTime() - new Date(a).getTime();
+/** Days spanned by the filter window. When only `from` is set (the
+ *  common case for the 24h / 7d quick-picks), "now" is used as the
+ *  implicit upper bound so the panel doesn't show "0 days" for a
+ *  genuinely non-empty window. */
+function daysBetween(from?: string, to?: string): number {
+  if (!from) return 0;
+  const start = new Date(from);
+  const end   = to ? new Date(to) : new Date();
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  const ms = end.getTime() - start.getTime();
   return Math.max(0, Math.floor(ms / (24 * 3600 * 1000))) + 1;
 }
 
@@ -191,12 +198,12 @@ export default async function ReportsPage({ searchParams }: PageProps) {
         <Filters defaults={filters} pageSize={pageSize} shortcodeOptions={shortcodeOpts} action="/reports" />
         <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 p-4 text-sm">
           <p className="font-medium text-amber-900 dark:text-amber-100">
-            Filter is too wide — Postgres cancelled the query at 30&nbsp;seconds.
+            This view is taking too long to load.
           </p>
           <p className="mt-1 text-amber-800 dark:text-amber-200">
-            {windowDays > 0 ? <>You asked for <span className="font-mono">{windowDays}</span> day(s) of legs. </> : null}
-            Narrow the date range (use the <span className="font-mono">1h</span> / <span className="font-mono">24h</span> / <span className="font-mono">7d</span> quick-picks), add an MNO or shortcode filter, or use{" "}
-            <Link href="/summary" className="underline">/summary</Link> for rolled-up counts over long windows.
+            {windowDays > 0 ? <>You&rsquo;re looking at <span className="font-mono">{windowDays}</span>&nbsp;day{windowDays === 1 ? "" : "s"} of legs. </> : null}
+            Try a shorter date range (use the <span className="font-mono">1h</span> / <span className="font-mono">24h</span> / <span className="font-mono">7d</span> shortcuts), filter by MNO or shortcode, or use{" "}
+            <Link href="/summary" className="underline">Reports&nbsp;Summary</Link> for aggregate counts over long windows.
           </p>
         </div>
       </div>

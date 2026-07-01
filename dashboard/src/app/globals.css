@@ -73,3 +73,14 @@ table tbody tr:nth-child(even) {
 .bg-brand-header {
   @apply bg-slate-900 text-slate-200;
 }
+
+/* Indeterminate top-of-page progress bar (see _topProgress.tsx).
+ * A 33 %-wide sliver sweeps left → right so the user always sees
+ * motion, no matter how long the navigation takes. */
+@keyframes top-progress {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.animate-top-progress {
+  animation: top-progress 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}

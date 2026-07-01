@@ -36,7 +36,7 @@ function NavPendingSpinner() {
     <span
       role="progressbar"
       aria-label="Loading"
-      className="ml-2 inline-block h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin align-middle"
+      className="ml-2 inline-block h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin align-middle drop-shadow-sm"
     />
   );
 }

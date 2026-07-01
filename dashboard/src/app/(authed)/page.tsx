@@ -285,8 +285,8 @@ export default async function Home({
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5">
         <h2 className="text-lg font-medium">Reports</h2>
         <p className="mt-1 text-sm text-slate-500">
-          Drill into individual sessions, filter by MNO / msisdn / shortcode /
-          date range, and (Vodacom) count 20-second billable sessions.
+          Drill into individual sessions and filter by MNO, MSISDN, shortcode,
+          or date range.
         </p>
         <Link
           href="/reports"

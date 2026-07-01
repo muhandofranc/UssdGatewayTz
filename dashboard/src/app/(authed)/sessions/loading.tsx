@@ -38,8 +38,7 @@ export default function SessionsLoading() {
         </div>
       </div>
       <div className="text-xs text-slate-500 text-center pt-2">
-        Loading sessions… wide date ranges (7d / 30d) can take a few
-        seconds while Postgres aggregates legs into sessions.
+        Loading sessions&hellip;
       </div>
     </div>
   );

@@ -239,8 +239,8 @@ export default async function ShortcodesPage({
       </div>
 
       <p className="text-xs text-slate-500">
-        Deactivation is a soft delete — the row stays in the DB so historical
-        ussd_session_logs keep their join. Reactivate any time.
+        Deactivating hides a shortcode from active use without removing its
+        history. You can reactivate it at any time.
       </p>
     </div>
   );

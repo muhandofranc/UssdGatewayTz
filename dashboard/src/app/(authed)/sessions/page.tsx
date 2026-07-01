@@ -46,11 +46,26 @@ function asPositiveInt(v: string | string[] | undefined, fallback: number, max?:
   return max ? Math.min(n, max) : n;
 }
 
-function parseFilters(sp: Awaited<PageProps["searchParams"]>): ReportFilters {
-  return {
-    // Default to last 24h when neither from nor to is set — keeps
-    // queries on the current monthly partition. Users opt out via the
-    // Reset button or a manual From= date.
+/** /sessions caps the date range to this many days. The per-session
+ *  aggregation touches every leg in the window; anything wider risks
+ *  a timeout even with the composite index. The FilterBar hides the
+ *  30d quick-pick when this is passed; parseFilters clamps as a
+ *  defence-in-depth against deep-linked URLs and manual date entry. */
+const SESSIONS_MAX_WINDOW_DAYS = 7;
+
+/** Result of parseFilters. `clampedFrom` is set when the user asked
+ *  for a wider window than SESSIONS_MAX_WINDOW_DAYS and we shortened
+ *  it — the page shows a small notice so the shift isn't silent. */
+interface ParsedFilters {
+  filters: ReportFilters;
+  clampedFrom?: string;   // original `from` before clamp (ISO date)
+}
+
+function parseFilters(sp: Awaited<PageProps["searchParams"]>): ParsedFilters {
+  const raw: ReportFilters = {
+    // Default to last 24h when neither from nor to is set — keeps the
+    // query on the current week's partition. Users can widen the
+    // range with a manual From= date, up to SESSIONS_MAX_WINDOW_DAYS.
     fromTs:       asString(sp.from) ?? defaultFromIfMissing(sp),
     toTs:         asString(sp.to),
     msisdn:       asString(sp.msisdn),
@@ -59,6 +74,22 @@ function parseFilters(sp: Awaited<PageProps["searchParams"]>): ReportFilters {
     shortcodeIds: asIntArray(sp.shortcode_id),
     errorClass:   asString(sp.error_class) || "any",
   };
+
+  // Server-side clamp: if the requested window exceeds the max, move
+  // `from` forward so the range is exactly SESSIONS_MAX_WINDOW_DAYS.
+  // Uses the parsed toTs (or "now" when unset) as the anchor.
+  const windowDays = daysBetween(raw.fromTs, raw.toTs);
+  if (raw.fromTs && windowDays > SESSIONS_MAX_WINDOW_DAYS) {
+    const anchor = raw.toTs ? new Date(raw.toTs) : new Date();
+    const clampedIso = new Date(
+      anchor.getTime() - SESSIONS_MAX_WINDOW_DAYS * 24 * 3600 * 1000,
+    ).toISOString().slice(0, 10);
+    return {
+      filters: { ...raw, fromTs: clampedIso },
+      clampedFrom: raw.fromTs,
+    };
+  }
+  return { filters: raw };
 }
 
 /* ---------- formatters ---------------------------------------- */
@@ -106,9 +137,16 @@ function isPgTimeoutError(e: unknown): boolean {
       || /Query read timeout/i.test(message);
 }
 
-function daysBetween(a?: string, b?: string): number {
-  if (!a || !b) return 0;
-  const ms = new Date(b).getTime() - new Date(a).getTime();
+/** Days spanned by the filter window. When only `from` is set (the
+ *  common case for the 24h / 7d quick-picks), "now" is used as the
+ *  implicit upper bound so the panel doesn't show "0 days" for a
+ *  genuinely non-empty window. */
+function daysBetween(from?: string, to?: string): number {
+  if (!from) return 0;
+  const start = new Date(from);
+  const end   = to ? new Date(to) : new Date();
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  const ms = end.getTime() - start.getTime();
   return Math.max(0, Math.floor(ms / (24 * 3600 * 1000))) + 1;
 }
 
@@ -126,7 +164,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
   if (!session) return null;
 
   const sp = await searchParams;
-  const filters = parseFilters(sp);
+  const { filters, clampedFrom } = parseFilters(sp);
   const page = asPositiveInt(sp.page, 1);
   const pageSize = asPositiveInt(sp.page_size, 10, 100);
   const windowDays = daysBetween(filters.fromTs, filters.toTs);
@@ -169,21 +207,20 @@ export default async function SessionsPage({ searchParams }: PageProps) {
         />
         <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 p-4 text-sm">
           <p className="font-medium text-amber-900 dark:text-amber-100">
-            Filter is too wide — Postgres cancelled the query at 30&nbsp;seconds.
+            This view is taking too long to load.
           </p>
           <p className="mt-2 text-amber-900 dark:text-amber-200">
-            You asked for {windowDays}&nbsp;days of per-session detail. The
-            per-session view has to touch every leg in that window; at gateway
-            scale that easily blows the query-timeout cap.
+            {windowDays > 0
+              ? <>You&rsquo;re looking at {windowDays}&nbsp;day{windowDays === 1 ? "" : "s"} of per-session detail across all shortcodes. Try one of these to bring it back:</>
+              : <>Try one of these to narrow it down:</>}
           </p>
           <ul className="mt-2 list-disc pl-5 text-amber-900 dark:text-amber-200">
-            <li>Narrow the date range to 7&nbsp;days or fewer, OR</li>
-            <li>Add an operator + shortcode filter to reduce the row set, OR</li>
+            <li>Shorten the date range to 7&nbsp;days or fewer.</li>
+            <li>Filter by MNO or shortcode.</li>
             <li>Use&nbsp;
               <Link href={`/summary${sp.from || sp.to ? "?" : ""}${sp.from ? `from=${sp.from}` : ""}${sp.from && sp.to ? "&" : ""}${sp.to ? `to=${sp.to}` : ""}`}
                     className="underline font-medium">Reports&nbsp;Summary</Link>
-              &nbsp;for aggregate views over long windows (backed by the
-              nightly rollup — sub-second even on 30&nbsp;days).
+              &nbsp;for aggregate counts over long windows.
             </li>
           </ul>
         </div>
@@ -249,7 +286,14 @@ export default async function SessionsPage({ searchParams }: PageProps) {
         </div>
       </div>
 
-      <FilterBar basePath="/sessions" sp={sp} />
+      <FilterBar basePath="/sessions" sp={sp} maxWindowDays={SESSIONS_MAX_WINDOW_DAYS} />
+      {clampedFrom ? (
+        <p className="text-xs text-slate-500 -mt-3">
+          Showing the last {SESSIONS_MAX_WINDOW_DAYS}&nbsp;days &mdash; this view is
+          limited to a {SESSIONS_MAX_WINDOW_DAYS}-day range. For longer periods, use{" "}
+          <Link href="/summary" className="underline">Reports&nbsp;Summary</Link>.
+        </p>
+      ) : null}
       <Filters defaults={filters} pageSize={pageSize} shortcodeOptions={shortcodeOpts} action="/sessions" />
 
       <div className="text-sm text-slate-500">

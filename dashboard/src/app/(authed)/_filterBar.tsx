@@ -95,9 +95,18 @@ function pickActive(
 interface Props {
   basePath: "/sessions" | "/reports";
   sp: Record<string, string | string[] | undefined>;
+  /** Maximum date-range window (days) this page supports. Quick-picks
+   *  that exceed this are dropped from the pill row and the footer
+   *  hint reflects the cap. /sessions uses 7 to keep per-session
+   *  aggregation snappy; /reports leaves it unset (30d allowed). */
+  maxWindowDays?: number;
 }
 
-export default function FilterBar({ basePath, sp }: Props) {
+export default function FilterBar({ basePath, sp, maxWindowDays }: Props) {
+  const picks = maxWindowDays === undefined
+    ? QUICK_PICKS
+    : QUICK_PICKS.filter((p) => Math.round(p.ms / (24 * 3600 * 1000)) <= maxWindowDays);
+
   return (
     <div className="sticky top-[57px] z-10 -mx-6 px-6 py-2 bg-slate-50/95 dark:bg-slate-950/95 backdrop-blur border-b border-slate-200 dark:border-slate-800">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
@@ -135,7 +144,7 @@ export default function FilterBar({ basePath, sp }: Props) {
         {/* Date quick-picks */}
         <div className="flex items-center gap-1">
           <span className="text-slate-500 uppercase tracking-wider text-[10px] mr-1">Range</span>
-          {QUICK_PICKS.map((p) => {
+          {picks.map((p) => {
             const active = pickActive(sp, p);
             return (
               <Link
@@ -163,8 +172,7 @@ export default function FilterBar({ basePath, sp }: Props) {
         </div>
 
         <div className="ml-auto text-[10px] text-slate-500">
-          Default range = last 24h. <span className="font-mono">/sessions</span> and{" "}
-          <span className="font-mono">/reports</span> prune to the matching monthly partitions.
+          Default range: last 24 hours{maxWindowDays !== undefined ? <> &middot; max range: {maxWindowDays} days on this view</> : null}.
         </div>
       </div>
     </div>

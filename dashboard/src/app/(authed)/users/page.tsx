@@ -214,7 +214,7 @@ async function FullList({
       <p className="text-xs text-slate-500">
         {readOnly
           ? "Read-only view. Auditors can see every portal user and their role; only super admins can create or edit."
-          : "Deactivation is a soft delete — the row stays so audit references keep resolving. The no-lockout invariants prevent deactivating the last active super_admin or yourself."}
+          : "Deactivating a user prevents future sign-ins without removing their history. You cannot deactivate yourself, or the last active super admin."}
       </p>
     </div>
   );
