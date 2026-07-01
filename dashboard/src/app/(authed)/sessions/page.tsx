@@ -88,8 +88,23 @@ function buildQs(sp: Awaited<PageProps["searchParams"]>, overrides: Record<strin
 /** PG error code for `canceling statement due to statement timeout`.
  *  Distinguishes "your filter is too wide" from real bugs — we catch
  *  57014 in the page render and surface a friendly explanation; every
- *  other error re-throws through the App Router's error boundary. */
+ *  other error re-throws through the App Router's error boundary.
+ *
+ *  Two timeout paths can fire on a slow query:
+ *    (1) PG server-side statement_timeout → error.code = '57014' (clean)
+ *    (2) pg-node client-side query_timeout → error.message =
+ *        'Query read timeout' with NO code (socket abandoned).
+ *
+ *  lib/db.ts is configured so (1) fires ~10s before (2) in normal
+ *  operation. But a network blip can flip the order, so we recognise
+ *  both here — same amber panel, same recovery path. */
 const PG_STATEMENT_TIMEOUT = "57014";
+function isPgTimeoutError(e: unknown): boolean {
+  const code    = (e as { code?: string })?.code;
+  const message = (e as { message?: string })?.message ?? "";
+  return code === PG_STATEMENT_TIMEOUT
+      || /Query read timeout/i.test(message);
+}
 
 function daysBetween(a?: string, b?: string): number {
   if (!a || !b) return 0;
@@ -134,8 +149,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
       loadShortcodeOptions(session.shortcodeIds),
     ]);
   } catch (e) {
-    const code = (e as { code?: string })?.code;
-    if (code !== PG_STATEMENT_TIMEOUT) throw e;
+    if (!isPgTimeoutError(e)) throw e;
     shortcodeOpts = await loadShortcodeOptions(session.shortcodeIds).catch(() => []);
     pageResult = { __timeout: true, windowDays };
     summary    = { __timeout: true, windowDays };

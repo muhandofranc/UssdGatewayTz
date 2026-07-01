@@ -15,6 +15,7 @@ import {
   COUNT_CAP, loadBillableSummary, loadReportPage, loadShortcodeOptions,
   type ReportFilters, type ReportRow,
 } from "@/lib/reports";
+import { fmtTs } from "@/lib/datetime";
 import Filters from "./Filters";
 import FilterBar, { defaultFromIfMissing } from "../_filterBar";
 
@@ -56,15 +57,28 @@ function parseFilters(sp: Awaited<PageProps["searchParams"]>): ReportFilters {
 
 /* ---------- helpers ------------------------------------------- */
 
-function fmtTs(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
 function fmtCount(n: number, capped: boolean): string {
   return capped ? `${COUNT_CAP.toLocaleString()}+` : n.toLocaleString();
+}
+
+/** Distinguishes "your filter is too wide" (both PG's 57014 statement
+ *  timeout AND pg-node's client-side query_timeout) from a genuine
+ *  bug. Server-side timeout normally fires first (lib/db.ts sizes the
+ *  client-side buffer to guarantee that), but a network blip can flip
+ *  the order — recognising both keeps us out of the App Router's crash
+ *  boundary either way. Matches the helper in sessions/page.tsx. */
+const PG_STATEMENT_TIMEOUT = "57014";
+function isPgTimeoutError(e: unknown): boolean {
+  const code    = (e as { code?: string })?.code;
+  const message = (e as { message?: string })?.message ?? "";
+  return code === PG_STATEMENT_TIMEOUT
+      || /Query read timeout/i.test(message);
+}
+
+function daysBetween(a?: string, b?: string): number {
+  if (!a || !b) return 0;
+  const ms = new Date(b).getTime() - new Date(a).getTime();
+  return Math.max(0, Math.floor(ms / (24 * 3600 * 1000))) + 1;
 }
 
 function buildQs(sp: Awaited<PageProps["searchParams"]>, overrides: Record<string, string | undefined>): string {
@@ -145,16 +159,59 @@ export default async function ReportsPage({ searchParams }: PageProps) {
   const filters = parseFilters(sp);
   const page = asPositiveInt(sp.page, 1);
   const pageSize = asPositiveInt(sp.page_size, 10, 100);
+  const windowDays = daysBetween(filters.fromTs, filters.toTs);
 
-  const [pageResult, summary, shortcodeOpts] = await Promise.all([
-    loadReportPage(filters, session.shortcodeIds, page, pageSize),
-    loadBillableSummary(filters, session.shortcodeIds),
-    loadShortcodeOptions(session.shortcodeIds),
-  ]);
+  // Same wide-filter recovery pattern as sessions/page.tsx: catch
+  // statement-timeout (or its client-side twin) and render an amber
+  // recovery panel with the filter bar, instead of the App Router's
+  // opaque crash boundary. loadShortcodeOptions is CHEAP (catalog
+  // lookup, no legs) so we refetch it inline for the recovery UI.
+  let pageResult: Awaited<ReturnType<typeof loadReportPage>> | { __timeout: true };
+  let summary:    Awaited<ReturnType<typeof loadBillableSummary>> | { __timeout: true };
+  let shortcodeOpts: Awaited<ReturnType<typeof loadShortcodeOptions>> = [];
+  try {
+    [pageResult, summary, shortcodeOpts] = await Promise.all([
+      loadReportPage(filters, session.shortcodeIds, page, pageSize),
+      loadBillableSummary(filters, session.shortcodeIds),
+      loadShortcodeOptions(session.shortcodeIds),
+    ]);
+  } catch (e) {
+    if (!isPgTimeoutError(e)) throw e;
+    shortcodeOpts = await loadShortcodeOptions(session.shortcodeIds).catch(() => []);
+    pageResult = { __timeout: true };
+    summary    = { __timeout: true };
+  }
 
-  const totalPages = Math.max(1, Math.ceil(pageResult.totalKnown / pageSize));
-  const fromIdx = pageResult.rows.length ? (page - 1) * pageSize + 1 : 0;
-  const toIdx = (page - 1) * pageSize + pageResult.rows.length;
+  if ("__timeout" in pageResult) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-baseline justify-between gap-4">
+          <h1 className="text-2xl font-semibold">Session legs</h1>
+        </div>
+        <Filters defaults={filters} pageSize={pageSize} shortcodeOptions={shortcodeOpts} action="/reports" />
+        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 p-4 text-sm">
+          <p className="font-medium text-amber-900 dark:text-amber-100">
+            Filter is too wide — Postgres cancelled the query at 30&nbsp;seconds.
+          </p>
+          <p className="mt-1 text-amber-800 dark:text-amber-200">
+            {windowDays > 0 ? <>You asked for <span className="font-mono">{windowDays}</span> day(s) of legs. </> : null}
+            Narrow the date range (use the <span className="font-mono">1h</span> / <span className="font-mono">24h</span> / <span className="font-mono">7d</span> quick-picks), add an MNO or shortcode filter, or use{" "}
+            <Link href="/summary" className="underline">/summary</Link> for rolled-up counts over long windows.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // TS narrowing: past the timeout branch above, both variables are
+  // the real successful-result shapes. `as` casts because TS can't
+  // propagate the narrowing across the two variables set together in
+  // the catch block — same pattern as sessions/page.tsx.
+  const pageResultOk = pageResult as Awaited<ReturnType<typeof loadReportPage>>;
+  const summaryOk    = summary    as Awaited<ReturnType<typeof loadBillableSummary>>;
+  const totalPages = Math.max(1, Math.ceil(pageResultOk.totalKnown / pageSize));
+  const fromIdx = pageResultOk.rows.length ? (page - 1) * pageSize + 1 : 0;
+  const toIdx = (page - 1) * pageSize + pageResultOk.rows.length;
 
   return (
     <div className="space-y-6">
@@ -176,7 +233,7 @@ export default async function ReportsPage({ searchParams }: PageProps) {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-        {summary.per_operator.map((op) => (
+        {summaryOk.per_operator.map((op) => (
           <div key={op.operator_name}
                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2">
             <div className="flex items-baseline justify-between">
@@ -199,7 +256,7 @@ export default async function ReportsPage({ searchParams }: PageProps) {
         ))}
         <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2">
           <div className="text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-300">total sessions</div>
-          <div className="text-lg font-semibold tabular-nums">{summary.total_billable_units.toLocaleString()}</div>
+          <div className="text-lg font-semibold tabular-nums">{summaryOk.total_billable_units.toLocaleString()}</div>
           <div className="text-[10px] text-amber-700/80 dark:text-amber-300/80">across all MNOs</div>
         </div>
       </div>
@@ -208,11 +265,11 @@ export default async function ReportsPage({ searchParams }: PageProps) {
       <Filters defaults={filters} pageSize={pageSize} shortcodeOptions={shortcodeOpts} action="/reports" />
 
       <div className="text-sm text-slate-500">
-        {pageResult.totalKnown === 0
+        {pageResultOk.totalKnown === 0
           ? "No matching legs."
           : <>
               Showing <span className="font-mono">{fromIdx.toLocaleString()}–{toIdx.toLocaleString()}</span>
-              {" "}of <span className="font-mono">{fmtCount(pageResult.totalKnown, pageResult.totalCapped)}</span>
+              {" "}of <span className="font-mono">{fmtCount(pageResultOk.totalKnown, pageResultOk.totalCapped)}</span>
               {" "}leg(s)
             </>}
       </div>
@@ -234,8 +291,8 @@ export default async function ReportsPage({ searchParams }: PageProps) {
             </tr>
           </thead>
           <tbody>
-            {pageResult.rows.map((r) => <Row key={r.id} r={r} />)}
-            {pageResult.rows.length === 0 ? (
+            {pageResultOk.rows.map((r) => <Row key={r.id} r={r} />)}
+            {pageResultOk.rows.length === 0 ? (
               <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={10}>
                 No rows match the current filters.
               </td></tr>
@@ -244,7 +301,7 @@ export default async function ReportsPage({ searchParams }: PageProps) {
         </table>
       </div>
 
-      {pageResult.totalKnown > pageSize ? (
+      {pageResultOk.totalKnown > pageSize ? (
         <div className="flex items-center gap-2 text-sm">
           <Link
             href={`/reports${buildQs(sp, { page: String(Math.max(1, page - 1)) })}`}
@@ -253,11 +310,11 @@ export default async function ReportsPage({ searchParams }: PageProps) {
             ← Prev
           </Link>
           <span className="text-slate-500">
-            Page <span className="font-mono">{page}</span> of <span className="font-mono">{pageResult.totalCapped ? `${totalPages}+` : totalPages}</span>
+            Page <span className="font-mono">{page}</span> of <span className="font-mono">{pageResultOk.totalCapped ? `${totalPages}+` : totalPages}</span>
           </span>
           <Link
             href={`/reports${buildQs(sp, { page: String(page + 1) })}`}
-            className={`rounded-md border border-slate-300 dark:border-slate-700 px-3 py-1 ${page >= totalPages && !pageResult.totalCapped ? "pointer-events-none opacity-40" : ""}`}
+            className={`rounded-md border border-slate-300 dark:border-slate-700 px-3 py-1 ${page >= totalPages && !pageResultOk.totalCapped ? "pointer-events-none opacity-40" : ""}`}
           >
             Next →
           </Link>

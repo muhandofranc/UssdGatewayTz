@@ -30,13 +30,20 @@ function readPgConfig(): PoolConfig {
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
     // Server-side kill — runaway queries get terminated by PG before
-    // they monopolise a slot. Surfaces as a normal SQL error so
-    // per-handler try/catch still works.
+    // they monopolise a slot. Surfaces as a proper SQL error with
+    // code = '57014', which page-level handlers can distinguish from
+    // real bugs (see sessions/page.tsx → PG_STATEMENT_TIMEOUT).
+    //
+    // Client-side query_timeout is deliberately set LONGER than the
+    // server-side statement_timeout — that ordering guarantees PG
+    // always fires first, so the wide-filter recovery path in
+    // page.tsx catches 57014 rather than pg-node's un-coded
+    // "Query read timeout" (which would fall through to the App
+    // Router's crash boundary and render as an ugly error page).
+    // The 10 s buffer covers network RTT between the container and
+    // the DB — bump both env vars in lockstep if you tune them.
     statement_timeout: Number(process.env.DASHBOARD_PG_STATEMENT_TIMEOUT_MS || 30_000),
-    // Client-side belt-and-braces — if statement_timeout misfires
-    // (e.g. network blip during query), pg-node gives up on the
-    // socket too.
-    query_timeout:     Number(process.env.DASHBOARD_PG_QUERY_TIMEOUT_MS     || 30_000),
+    query_timeout:     Number(process.env.DASHBOARD_PG_QUERY_TIMEOUT_MS     || 40_000),
     // TCP keepalive — without this, a dead-but-not-FIN'd backend
     // (PG restart, NAT reaper, k8s pod recycle) leaves a "ghost"
     // connection in the pool that hangs forever until the OS-level

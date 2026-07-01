@@ -11,6 +11,7 @@
 
 import { useCallback, useState } from "react";
 import type { SessionLeg, SessionRow } from "@/lib/reports";
+import { fmtTs } from "@/lib/datetime";
 
 const TOTAL_COLS = 12;   // chevron + 11 session-summary columns
 type LegsState =
@@ -19,15 +20,7 @@ type LegsState =
   | { kind: "ready"; legs: SessionLeg[] }
   | { kind: "error"; message: string };
 
-/* -------- formatting helpers (duplicated minimal vs the page so
- * this component stays self-contained) -------- */
-
-function fmtTs(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
+/* -------- formatting helpers -------- */
 
 function fmtDuration(input: number | string): string {
   const secs = Number(input);

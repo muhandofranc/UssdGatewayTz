@@ -6,6 +6,7 @@
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { listExportsForUser, type ExportRow } from "@/lib/exports";
+import { fmtTs } from "@/lib/datetime";
 
 function fmtSize(bytes: number | null): string {
   if (bytes === null || !Number.isFinite(bytes)) return "—";
@@ -13,14 +14,6 @@ function fmtSize(bytes: number | null): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-function fmtTs(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function statusBadge(status: ExportRow["status"]) {
