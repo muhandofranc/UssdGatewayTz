@@ -350,6 +350,96 @@ export interface SessionPage {
   totalCapped: boolean;
 }
 
+/**
+ * Fast bounded-count via the `daily_session_summary` rollup (db/015).
+ * Returns the SUM of pre-aggregated per-day session counts for a
+ * filter set that only touches fields the rollup can answer.
+ *
+ * Falls through (returns `null`) — signalling the caller to run the
+ * slow DISTINCT+LIMIT scan — when ANY of the following holds:
+ *
+ *   * a filter needs raw-leg data the rollup doesn't carry
+ *     (msisdn, sessionId, a specific errorClass beyond ok/error);
+ *     `errorClass='error'` also falls through because the rollup
+ *     only stores a total error count, not per-class rows;
+ *   * the window overlaps today's date — the rollup is nightly-
+ *     refreshed and doesn't cover today (see db/015 header note);
+ *   * no explicit date range was supplied (an unbounded window
+ *     would scan the whole rollup, defeating the purpose).
+ *
+ * We can't use the rollup for filters.errorClass='ok' either
+ * without extra bookkeeping (SUM(sessions) − SUM_of_error_sessions
+ * would over-count sessions whose LEGS split across ok+error
+ * legs). Kept simple: only errorClass 'any' / undefined qualifies.
+ */
+async function tryRollupBoundedCount(
+  filters: ReportFilters,
+  allowedShortcodeIds: number[] | null,
+): Promise<number | null> {
+  if (filters.msisdn) return null;
+  if (filters.sessionId) return null;
+  if (filters.errorClass && filters.errorClass !== "any") return null;
+  if (!filters.fromTs || !filters.toTs) return null;
+
+  // The rollup covers up through yesterday (Africa/Nairobi day
+  // boundary at the server level — we approximate with the JS
+  // day boundary here; a mid-day rebuild would only ever OVER-
+  // report by one day, never UNDER-report). Bail when toTs is
+  // today or later to guarantee no gap.
+  const today = new Date().toISOString().slice(0, 10);
+  if (filters.toTs >= today) return null;
+
+  // If allowedShortcodeIds is null → user has global report perms,
+  // no shortcode restriction. If it's an empty array → the caller
+  // has NO shortcodes granted; return 0 without hitting the DB.
+  if (allowedShortcodeIds !== null && allowedShortcodeIds.length === 0) {
+    return 0;
+  }
+
+  const params: any[] = [];
+  const next = (v: any) => { params.push(v); return `$${params.length}`; };
+  const conds: string[] = [
+    `d.date >= ${next(filters.fromTs)}::date`,
+    `d.date <= ${next(filters.toTs)}::date`,
+  ];
+
+  if (filters.operators && filters.operators.length) {
+    // Rollup keys by operator_id; translate the operator_name filter
+    // via a subquery so we don't need to teach the caller two shapes.
+    conds.push(
+      `d.operator_id IN (SELECT id FROM operators WHERE name = ANY(${next(filters.operators)}::text[]))`,
+    );
+  }
+  // Intersect the user-selected shortcode filter with the RBAC allow-
+  // list. If the user picked shortcodes, use those; else fall back to
+  // the allowlist alone; else no shortcode narrowing at all.
+  const scFilter = filters.shortcodeIds && filters.shortcodeIds.length
+    ? filters.shortcodeIds.filter(
+        (id) => allowedShortcodeIds === null || allowedShortcodeIds.includes(id),
+      )
+    : allowedShortcodeIds;
+  if (scFilter !== null) {
+    if (scFilter.length === 0) return 0;
+    conds.push(`d.shortcode_id = ANY(${next(scFilter)}::int[])`);
+  }
+
+  const sql = `
+    SELECT COALESCE(SUM(sessions), 0)::bigint AS c
+      FROM daily_session_summary d
+     WHERE ${conds.join(" AND ")}
+  `;
+  try {
+    const r = await query<{ c: string }>(sql, params);
+    return Number(r.rows[0]?.c ?? 0);
+  } catch {
+    // If the rollup table is missing (fresh install pre-db/015)
+    // or the query fails for any other reason, fall back to the
+    // slow path rather than 500-ing the page.
+    return null;
+  }
+}
+
+
 export async function loadSessionPage(
   filters: ReportFilters,
   allowedShortcodeIds: number[] | null,
@@ -360,73 +450,104 @@ export async function loadSessionPage(
   const offset = Math.max(0, (page - 1) * ps);
   const where = buildWhere(filters, allowedShortcodeIds);
 
-  // Bounded count of DISTINCT sessions matching the filter set.
-  // We cap at COUNT_CAP+1 by selecting at most that many distinct
-  // (session_id, operator_name) tuples then counting them.
-  const countSql = `
-    SELECT COUNT(*) AS c
-      FROM (
-        SELECT DISTINCT session_id, operator_name
-          FROM ussd_session_logs l${where.sql}
-         LIMIT ${COUNT_CAP + 1}
-      ) capped
-  `;
-  const countR = await query<{ c: string }>(countSql, where.params);
-  const rawCount = Number(countR.rows[0]?.c ?? 0);
-  const totalCapped = rawCount > COUNT_CAP;
-  const totalKnown = totalCapped ? COUNT_CAP : rawCount;
-
-  // CTE + LEFT JOIN to shortcodes for the human-friendly code.
-  // The (array_agg ORDER BY ts DESC)[1] idiom pulls the LATEST leg's
-  // value for "final_*" columns without window functions.
+  // Bounded count of DISTINCT sessions matching the filter set. Two
+  // paths: FAST via daily_session_summary (db/015) when the filter
+  // set only uses fields the rollup can answer, otherwise the
+  // DISTINCT+LIMIT scan.
   //
-  // `service_code` is rolled up too so the outer SELECT can fall
-  // back to it when the LEFT JOIN to shortcodes misses (every leg
-  // had shortcode_id IS NULL — the 'shortcode_not_found' case).
-  // Without this, the report would show a blank ShortCode cell
-  // instead of what the customer actually dialed.
+  // The rollup path skips scanning `ussd_session_logs` entirely for
+  // the count step — sub-10ms even on a 30-day window. It falls
+  // through to the slow path when a filter can't be answered from
+  // the pre-aggregate (msisdn, sessionId, specific error class),
+  // OR when the window includes today (rollup only covers past
+  // days per db/015).
+  const rollupCount = await tryRollupBoundedCount(filters, allowedShortcodeIds);
+  let totalKnown: number;
+  let totalCapped: boolean;
+  if (rollupCount !== null) {
+    totalCapped = rollupCount > COUNT_CAP;
+    totalKnown = totalCapped ? COUNT_CAP : rollupCount;
+  } else {
+    const countSql = `
+      SELECT COUNT(*) AS c
+        FROM (
+          SELECT DISTINCT session_id, operator_name
+            FROM ussd_session_logs l${where.sql}
+           LIMIT ${COUNT_CAP + 1}
+        ) capped
+    `;
+    const countR = await query<{ c: string }>(countSql, where.params);
+    const rawCount = Number(countR.rows[0]?.c ?? 0);
+    totalCapped = rawCount > COUNT_CAP;
+    totalKnown = totalCapped ? COUNT_CAP : rawCount;
+  }
+
+  // Rows query — one pass over the base table via DISTINCT ON +
+  // window functions (was: six `array_agg(x ORDER BY ts DESC)[1]`
+  // aggregates, one per "latest leg" column, each forcing a per-
+  // group Sort). The refactor pairs with db/018's composite index
+  // (session_id, operator_name, ts DESC) so PG walks the index in
+  // order and never has to spill a Sort to disk on wide windows.
+  //
+  // Semantics of the columns:
+  //   * `latest-by-ts` fields (service_code, final_action, ...) —
+  //     DISTINCT ON with ORDER BY (session_id, operator_name, ts DESC)
+  //     picks the last-arriving leg, which is what the old query did.
+  //   * `any-non-null` fields (shortcode_id, msisdn) — FIRST_VALUE
+  //     with ORDER BY (col IS NULL, ts DESC) inside an UNBOUNDED
+  //     window frame gives the first non-null value across the
+  //     partition, preserving the original behaviour where a shortcode
+  //     resolved on leg 1 survives even if later legs went NULL.
+  //   * aggregates (MIN/MAX/COUNT) — window functions over
+  //     `PARTITION BY session_id, operator_name`, evaluated in the
+  //     same pass DISTINCT ON already needs, so effectively free.
+  //
+  // COALESCE(s.code, g.service_code) preserves the "shortcode_not_
+  // found" display fallback that the old query provided.
   const rowsSql = `
     WITH grouped AS (
-      SELECT
+      SELECT DISTINCT ON (session_id, operator_name)
         session_id,
         operator_name,
-        (array_agg(shortcode_id) FILTER (WHERE shortcode_id IS NOT NULL))[1] AS shortcode_id,
-        (array_agg(service_code  ORDER BY ts DESC NULLS LAST))[1] AS service_code,
-        (array_agg(msisdn)       FILTER (WHERE msisdn       IS NOT NULL))[1] AS msisdn,
-        MIN(ts) AS first_ts,
-        MAX(ts) AS last_ts,
-        -- Sub-second seconds, returned as float8 so node-postgres
-        -- delivers a real JS number. EXTRACT(EPOCH) returns NUMERIC
-        -- in PG14+ which pg-node parses as a STRING (precision-
-        -- preserving default) — without the ::float8 cast,
-        -- fmtDuration(string).toFixed(...) throws at render.
-        EXTRACT(EPOCH FROM (MAX(ts) - MIN(ts)))::float8 AS duration_secs,
-        COUNT(*) AS leg_count,
-        (array_agg(handler_response_action ORDER BY ts DESC NULLS LAST))[1] AS final_action,
-        (array_agg(error_class             ORDER BY ts DESC NULLS LAST))[1] AS final_error_class,
-        (array_agg(ussd_string             ORDER BY ts DESC NULLS LAST))[1] AS final_ussd_string,
-        (array_agg(handler_response_text   ORDER BY ts DESC NULLS LAST))[1] AS final_response_text
-        -- legs are LAZY-LOADED via /api/sessions/legs on chevron
-        -- expand — see SessionRow.legs comment. The previous
-        -- jsonb_agg(...) here added ~75KB to a 25-row page just for
-        -- pre-loaded leg detail nobody had asked for yet.
+        service_code,
+        handler_response_action AS final_action,
+        error_class             AS final_error_class,
+        ussd_string             AS final_ussd_string,
+        handler_response_text   AS final_response_text,
+        MIN(ts) OVER w AS first_ts,
+        MAX(ts) OVER w AS last_ts,
+        COUNT(*) OVER w AS leg_count,
+        FIRST_VALUE(shortcode_id) OVER (
+          PARTITION BY session_id, operator_name
+          ORDER BY (shortcode_id IS NULL), ts DESC
+          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        ) AS shortcode_id,
+        FIRST_VALUE(msisdn) OVER (
+          PARTITION BY session_id, operator_name
+          ORDER BY (msisdn IS NULL), ts DESC
+          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        ) AS msisdn
         FROM ussd_session_logs l${where.sql}
-        GROUP BY session_id, operator_name
+        WINDOW w AS (PARTITION BY session_id, operator_name)
+        ORDER BY session_id, operator_name, ts DESC NULLS LAST
     )
     SELECT
       g.session_id, g.operator_name,
-      -- Prefer the configured shortcode label; fall back to the
-      -- dialed service_code so 'shortcode_not_found' sessions still
-      -- show what the customer dialed.
       COALESCE(s.code, g.service_code) AS shortcode_code,
       g.msisdn,
       g.first_ts::text, g.last_ts::text,
-      g.duration_secs, g.leg_count::int,
+      -- Sub-second precision, ::float8 so node-postgres delivers a
+      -- real JS number rather than a NUMERIC-as-string.
+      EXTRACT(EPOCH FROM (g.last_ts - g.first_ts))::float8 AS duration_secs,
+      g.leg_count::int,
       g.final_action, g.final_error_class,
       g.final_ussd_string, g.final_response_text,
       o.billable_window_secs,
       CASE WHEN o.billable_window_secs IS NOT NULL
-           THEN GREATEST(1, CEIL(g.duration_secs / o.billable_window_secs::float8))::int
+           THEN GREATEST(1, CEIL(
+             EXTRACT(EPOCH FROM (g.last_ts - g.first_ts))::float8
+             / o.billable_window_secs::float8
+           ))::int
            ELSE NULL
       END AS billable_units
     FROM grouped g

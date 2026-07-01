@@ -170,6 +170,55 @@ services:
       retries: 3
       start_period: 30s
 
+  # ----------------------------------------------------------------
+  # Exports worker — polls portal_exports for queued jobs, streams
+  # matching rows to a CSV in the ussd_exports volume, flips status
+  # to 'ready' | 'failed'. Runs the SAME image as `dashboard:` so we
+  # reuse the built worker script + node_modules; only `command:`
+  # differs.
+  #
+  # Ships alongside `dashboard:` because both need the same volume
+  # and the same PG creds. Missing this service is what caused the
+  # "export queued indefinitely" bug 2026-06-30 — the image included
+  # worker/exports_worker.mjs but no container was running it.
+  # ----------------------------------------------------------------
+  exports-worker:
+    image: ussdgatewaytz-dashboard
+    container_name: ussd-exports-worker
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      dashboard:
+        # `service_started` (not `_healthy`) — the dashboard doesn't
+        # need to be serving requests before the worker can drain
+        # the queue. Waiting for healthy would delay draining by ~30s
+        # on cold starts.
+        condition: service_started
+    environment:
+      USSD_PG_HOST:     ${USSD_PG_HOST}
+      USSD_PG_PORT:     ${USSD_PG_PORT:-5432}
+      USSD_PG_USER:     ${USSD_PG_USER}
+      USSD_PG_PASSWORD: ${USSD_PG_PASSWORD}
+      USSD_PG_DB:       ${USSD_PG_DB}
+      USSD_PG_SSLMODE:  ${USSD_PG_SSLMODE:-prefer}
+      # Worker tuning — matches the defaults in
+      # dashboard/worker/exports_worker.mjs. Bump for prod once
+      # traffic warrants it.
+      EXPORTS_DIR:                       /exports
+      EXPORTS_POLL_INTERVAL_MS:          ${EXPORTS_POLL_INTERVAL_MS:-3000}
+      EXPORTS_CHUNK_SIZE:                ${EXPORTS_CHUNK_SIZE:-10000}
+      EXPORTS_REAP_AFTER_SECONDS:        ${EXPORTS_REAP_AFTER_SECONDS:-600}
+      EXPORTS_RETENTION_DAYS:            ${EXPORTS_RETENTION_DAYS:-7}
+      EXPORTS_MAINTENANCE_INTERVAL_MS:   ${EXPORTS_MAINTENANCE_INTERVAL_MS:-60000}
+      NODE_ENV: production
+    volumes:
+      - ussd_exports:/exports
+    # Worker has no HTTP surface — no port, no healthcheck. A crashed
+    # worker is caught by `restart: unless-stopped`; a stuck worker
+    # is caught by the reaper's "zombie job" query flipping stalled
+    # 'running' rows back to 'queued' after REAP_AFTER_SECONDS.
+    command: ["node", "worker/exports_worker.mjs"]
+
 # Named volume shared between the dashboard (writes the file path
 # into portal_exports.file_path and streams it on /api/exports/<id>/
 # download) and the worker (produces the CSV here).
