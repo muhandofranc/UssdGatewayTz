@@ -148,14 +148,15 @@
     },
     {
       "type": "stat",
-      "title": "Containers running",
+      "title": "Containers running (by host)",
       "gridPos": { "h": 6, "w": 6, "x": 0, "y": 35 },
       "datasource": "Prometheus",
       "fieldConfig": { "defaults": { "unit": "short" } },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [
         {
-          "expr": "count(container_last_seen{name!=\"\"} > (time() - 60))",
+          "expr": "count by (host) (container_last_seen{name!=\"\"} > (time() - 60))",
+          "legendFormat": "{{host}}",
           "refId": "A"
         }
       ]
@@ -168,8 +169,8 @@
       "fieldConfig": { "defaults": { "unit": "percent" } },
       "targets": [
         {
-          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\".+\"}[1m])) * 100",
-          "legendFormat": "{{name}}",
+          "expr": "sum by (host, name) (rate(container_cpu_usage_seconds_total{name=~\".+\"}[1m])) * 100",
+          "legendFormat": "{{host}} / {{name}}",
           "refId": "A"
         }
       ]
@@ -183,7 +184,7 @@
       "targets": [
         {
           "expr": "container_memory_rss{name=~\".+\"}",
-          "legendFormat": "{{name}}",
+          "legendFormat": "{{host}} / {{name}}",
           "refId": "A"
         }
       ]

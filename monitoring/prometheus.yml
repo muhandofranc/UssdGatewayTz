@@ -40,7 +40,7 @@ scrape_configs:
       - targets: ["172.16.0.162:8280"]
         labels:
           service: gateway
-          host:    gateway
+          host:    172.16.0.162
 
   # ----- Host CPU / RAM / disk / network — both hosts --------------
   # One target per host. `host` label lets Grafana split.
@@ -49,11 +49,11 @@ scrape_configs:
       - targets: ["localhost:9100"]
         labels:
           service: host
-          host:    dashboard
+          host:    172.16.0.163
       - targets: ["172.16.0.162:9100"]
         labels:
           service: host
-          host:    gateway
+          host:    172.16.0.162
 
   # ----- Per-container CPU / memory / IO / up-state — both hosts ---
   # cAdvisor exposes one series per container per family; combined
@@ -64,11 +64,11 @@ scrape_configs:
       - targets: ["localhost:8082"]
         labels:
           service: containers
-          host:    dashboard
+          host:    172.16.0.163
       - targets: ["172.16.0.162:8082"]
         labels:
           service: containers
-          host:    gateway
+          host:    172.16.0.162
 
   # ----- Dashboard (optional) -----------------------------------
   # The Next.js dashboard doesn't ship a /metrics endpoint today.
@@ -79,4 +79,4 @@ scrape_configs:
   #     - targets: ["localhost:3000"]
   #       labels:
   #         service: dashboard
-  #         host:    dashboard
+  #         host:    172.16.0.163
