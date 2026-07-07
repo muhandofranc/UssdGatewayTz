@@ -286,13 +286,17 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro,rslave
+    # Args passed as a shell string so the regex-escape rules in
+    # docker-compose don't mangle the `$` in `--collector.filesystem
+    # .mount-points-exclude`. The exclude regex trims noisy pseudo
+    # mounts (overlay, tmpfs, docker's internal state) so a `df`
+    # scrape stays scannable in Grafana.
     command:
       - "--path.procfs=/host/proc"
       - "--path.sysfs=/host/sys"
       - "--path.rootfs=/rootfs"
-      # Ignore the pseudo-filesystems Prometheus doesn't care about
-      # (tmpfs, overlay, cgroup) so the mount count stays scannable.
       - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/.+)($$|/)"
+      - "--collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$$"
       - "--web.listen-address=0.0.0.0:9100"
 
   cadvisor:
@@ -312,6 +316,15 @@ services:
       - /dev/kmsg
     command:
       - "--port=8082"
+    # cAdvisor bakes a HEALTHCHECK into its image that probes
+    # `http://localhost:8080` — the container's default port. We run
+    # on 8082 (to sidestep collisions with anything on 8080), so the
+    # probe always fails and marks the container UNHEALTHY even
+    # though /metrics is happily serving on 8082. Disable it —
+    # liveness is delegated to `restart: unless-stopped`, and the
+    # real "is it working?" signal is Prometheus's `up{job="cadvisor"}`.
+    healthcheck:
+      disable: true
 
   grafana:
     image: grafana/grafana:11.3.0
