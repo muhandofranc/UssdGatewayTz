@@ -39,7 +39,19 @@ const CHUNK = Number(process.env.EXPORTS_CHUNK_SIZE || 10_000);
 // query plus a small file unlink loop. Defaults are tuned for the
 // "dev / single tenant" baseline; bump in compose env for prod.
 const REAP_AFTER_SECONDS      = Number(process.env.EXPORTS_REAP_AFTER_SECONDS      || 600);    // 10 min
-const RETENTION_DAYS          = Number(process.env.EXPORTS_RETENTION_DAYS          || 7);
+// Retention is expressed in HOURS. `EXPORTS_RETENTION_HOURS` is the
+// canonical knob; `EXPORTS_RETENTION_DAYS` is honoured for backwards
+// compatibility (multiplied out). Default trimmed from 7 days to
+// 12 hours: exported CSVs are cheap to re-request, and holding a week
+// of them on disk was eating volume space with no product value.
+function computeRetentionHours() {
+  const h = process.env.EXPORTS_RETENTION_HOURS;
+  if (h !== undefined && h !== "") return Number(h);
+  const d = process.env.EXPORTS_RETENTION_DAYS;
+  if (d !== undefined && d !== "") return Number(d) * 24;
+  return 12;
+}
+const RETENTION_HOURS         = computeRetentionHours();
 const MAINTENANCE_INTERVAL_MS = Number(process.env.EXPORTS_MAINTENANCE_INTERVAL_MS || 60_000); // 60s
 
 mkdirSync(EXPORTS_DIR, { recursive: true });
@@ -285,7 +297,7 @@ async function reapZombies() {
 }
 
 /**
- * Retention sweep: CSVs older than RETENTION_DAYS get their file
+ * Retention sweep: CSVs older than RETENTION_HOURS get their file
  * unlinked from /exports and the row flipped to `expired` (file_path
  * cleared, size kept for accounting). The /exports UI shows
  * "retention" instead of a Download link for expired rows.
@@ -299,11 +311,11 @@ async function sweepRetention() {
     `SELECT id, file_path
        FROM portal_exports
       WHERE status = 'ready'
-        AND completed_at < now() - ($1 || ' days')::interval
+        AND completed_at < now() - ($1 || ' hours')::interval
         AND file_path IS NOT NULL
       ORDER BY id
       LIMIT 1000`,
-    [String(RETENTION_DAYS)],
+    [String(RETENTION_HOURS)],
   );
   if (r.rowCount === 0) return;
   let expired = 0;
@@ -432,7 +444,7 @@ async function tick() {
 
 console.log(
   `[exports-worker] starting; dir=${EXPORTS_DIR} pg=${PG.host}:${PG.port}/${PG.database} ` +
-  `reap_after=${REAP_AFTER_SECONDS}s retention=${RETENTION_DAYS}d ` +
+  `reap_after=${REAP_AFTER_SECONDS}s retention=${RETENTION_HOURS}h ` +
   `maintenance_every=${MAINTENANCE_INTERVAL_MS}ms`
 );
 

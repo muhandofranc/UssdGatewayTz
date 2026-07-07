@@ -1,0 +1,63 @@
+# Prometheus scrape configuration for UssdGatewayTz.
+#
+# All targets are on localhost because the compose services use
+# network_mode: host (matching the rest of the stack). Change the
+# targets if you split observability onto a separate compose network.
+
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+  # External label that shows up on every series — makes it obvious
+  # which environment a copy-pasted graph came from.
+  external_labels:
+    env: production
+    stack: ussd-gateway-tz
+
+scrape_configs:
+
+  # ----- Prometheus itself (self-observation) -------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9091"]
+
+  # ----- The USSD gateway app -----------------------------------
+  # `/metrics` on the gateway aggregates counters across all uvicorn
+  # workers (multi-process mode; see app/metrics.py). One scrape
+  # target = one endpoint = one summed view.
+  - job_name: ussd-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:8280"]
+        labels:
+          service: gateway
+
+  # ----- Host-level: CPU / RAM / disk / network -----------------
+  # node-exporter runs with --pid=host so its numbers reflect the
+  # physical host, not the container.
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["localhost:9100"]
+        labels:
+          service: host
+
+  # ----- Per-container CPU / memory / IO / up-state -------------
+  # cAdvisor exposes one series per container per metric family.
+  # `container_last_seen` tells you which containers are running;
+  # combined with `up{}` on the other jobs you get "who is alive and
+  # who is dead" at a glance.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["localhost:8082"]
+        labels:
+          service: containers
+
+  # ----- Dashboard (optional) -----------------------------------
+  # The Next.js dashboard doesn't ship a /metrics endpoint today.
+  # Once it does, uncomment this block — cAdvisor's per-container
+  # numbers cover its resource usage in the meantime.
+  # - job_name: dashboard
+  #   metrics_path: /api/metrics
+  #   static_configs:
+  #     - targets: ["localhost:3000"]
+  #       labels:
+  #         service: dashboard

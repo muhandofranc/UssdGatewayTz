@@ -36,10 +36,14 @@ from .adapters import REGISTRY
 from .adapters._common import end_reply
 from .config import load as load_settings
 from .db import (
-    close_pool, expire_active_session, init_pool, log_leg, resolve_shortcode,
-    status_message_for,
+    close_log_writer, close_pool, expire_active_session, init_log_writer,
+    init_pool, log_leg, resolve_shortcode, status_message_for,
 )
-from .forwarder import forward
+from .forwarder import close_forwarder, forward, init_forwarder, sample_pool_gauges
+from .metrics import (
+    HTTP_REQUEST_LATENCY_SECONDS, HTTP_REQUESTS_TOTAL,
+    normalise_route, render as render_metrics,
+)
 from .unified import (
     Action, SessionEvent, TERMINAL_EVENTS, UnifiedReply, UnifiedRequest,
 )
@@ -58,12 +62,23 @@ async def _lifespan(_app: FastAPI):
         level=_SETTINGS.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Order matters:
+    #   1. PG pool up first — the async log writer needs it borrowable.
+    #   2. Log-writer thread up — subsequent code paths can enqueue.
+    #   3. Shared httpx client up — forwarder needs it warm before
+    #      the first request lands.
     init_pool(_SETTINGS.pg)
+    init_log_writer()
+    init_forwarder()
     LOGGER.info("ussd-gateway-tz started — adapters loaded: %s",
                 sorted(REGISTRY.keys()))
     try:
         yield
     finally:
+        # Shut down in reverse: stop taking new work, then drain the
+        # log writer (its remaining rows), then release the PG pool.
+        await close_forwarder()
+        close_log_writer()
         close_pool()
         LOGGER.info("ussd-gateway-tz stopped")
 
@@ -74,6 +89,54 @@ app = FastAPI(
     version="0.1.0",
     lifespan=_lifespan,
 )
+
+
+# ---------- Prometheus HTTP request metrics ----------
+# Middleware runs on EVERY request (including /metrics and /healthz)
+# so scrape budgets and probe latency stay visible in Grafana. Route
+# labels are normalised (see metrics.normalise_route) to guarantee
+# bounded cardinality — random-path scanners can't create a new time
+# series per URL.
+@app.middleware("http")
+async def _metrics_middleware(request: Request, call_next):
+    import time as _time
+    start = _time.monotonic()
+    try:
+        response: Response = await call_next(request)
+        status_class = f"{response.status_code // 100}xx"
+    except Exception:
+        # Server crashed the handler. Still record it so the scrape
+        # accounts for the failure, then re-raise to FastAPI's
+        # default 500 machinery.
+        elapsed = _time.monotonic() - start
+        route = normalise_route(request.url.path)
+        HTTP_REQUESTS_TOTAL.labels(request.method, route, "5xx").inc()
+        HTTP_REQUEST_LATENCY_SECONDS.labels(request.method, route).observe(elapsed)
+        raise
+    elapsed = _time.monotonic() - start
+    route = normalise_route(request.url.path)
+    HTTP_REQUESTS_TOTAL.labels(request.method, route, status_class).inc()
+    HTTP_REQUEST_LATENCY_SECONDS.labels(request.method, route).observe(elapsed)
+    return response
+
+
+@app.get("/metrics", include_in_schema=False)
+async def _metrics() -> Response:
+    """Prometheus scrape endpoint.
+
+    Serves counters/histograms/gauges from `app.metrics`. In
+    multi-process mode (which is the default under uvicorn --workers > 1),
+    aggregates across all worker processes via the shared
+    PROMETHEUS_MULTIPROC_DIR — see app/metrics.py for the mechanics.
+    """
+    # Sample live pool state each scrape so operators see it fresh
+    # without needing a background poller.
+    try:
+        sample_pool_gauges()
+    except Exception:
+        LOGGER.exception("pool gauge sampling failed (metrics still served)")
+    payload, content_type = render_metrics()
+    return Response(content=payload, media_type=content_type)
 
 
 # ---------- OpenAPI spec override ----------

@@ -40,13 +40,23 @@ RUN chmod +x /app/entrypoint.sh
 # back to an empty stub.
 COPY docs/ /app/docs/
 
-# Uvicorn worker count tuned for a typical 2-vCPU container. Override
-# via `command:` in compose if you scale up.
+# Uvicorn tuning (every flag ships via the `uvicorn[standard]` extra):
+#   --workers 4      : the previous "2" was under-provisioned at the
+#                      peak we observed (~200 hops/sec). Four workers
+#                      on a 4-vCPU container = ~one core per worker
+#                      with headroom for OS + colocated php-fpm.
+#                      Bigger box? Override via `command:` in compose.
+#   --loop uvloop    : ~15-25 % faster than the default asyncio loop
+#                      on the hot HTTP path.
+#   --http httptools : ~10-15 % faster HTTP parsing than the default
+#                      h11 fallback.
 EXPOSE 8280
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", "--port", "8280", \
-     "--workers", "2", \
+     "--workers", "4", \
+     "--loop", "uvloop", \
+     "--http", "httptools", \
      "--proxy-headers", "--forwarded-allow-ips=*"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

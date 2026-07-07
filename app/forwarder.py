@@ -38,7 +38,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+from typing import Optional
 
 import httpx
 
@@ -54,9 +56,150 @@ _LOG_BODY_TRUNC = 2000
 _LOG_BODY_INLINE = 500
 
 from .db import ShortcodeRow
+from .metrics import (
+    FORWARDER_HTTP_CONNECTIONS_INUSE,
+    FORWARDER_HTTP_CONNECTIONS_KEEPALIVE,
+    USSD_HANDLER_ERRORS_TOTAL,
+    USSD_HOP_LATENCY_SECONDS,
+    USSD_HOP_TOTAL,
+)
 from .unified import Action, HandlerOutcome, UnifiedReply, UnifiedRequest
 
 LOGGER = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------
+# Shared httpx client
+# ------------------------------------------------------------------
+# The forwarder was previously creating a fresh AsyncClient per hop:
+#     async with httpx.AsyncClient(timeout=timeout) as client:
+#         await client.post(...)
+# That works, but every hop then does its own TCP connect (and TLS
+# handshake, when the handler isn't 127.0.0.1). At production peaks
+# (hundreds of hops/second) the churn shows up as ~200-300 ms of extra
+# latency on every leg, saturates the ephemeral-port pool, and defeats
+# HTTP keep-alive against the PHP handlers entirely.
+#
+# A single module-level client, created at startup, keeps a warm
+# connection pool per handler URL and lets keep-alive do its job.
+# Timeouts stay per-request (the per-shortcode timeout still wins over
+# the client's default).
+_CLIENT: Optional[httpx.AsyncClient] = None
+
+
+def _int_env(name: str, default: int) -> int:
+    """Best-effort env lookup for connection-pool sizing knobs."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        n = int(raw)
+        return n if n > 0 else default
+    except ValueError:
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+def init_forwarder() -> None:
+    """Create the shared AsyncClient at app startup. Idempotent so
+    the FastAPI lifespan hook can call this on reload without leaking
+    a client."""
+    global _CLIENT
+    if _CLIENT is not None:
+        return
+
+    # Pool caps — tuned for the "single host, 4 MNOs × N shortcodes"
+    # deployment. Env overrides let ops widen these without a rebuild
+    # on a bigger box.
+    max_conn      = _int_env("USSD_HTTPX_MAX_CONNECTIONS",           200)
+    max_keepalive = _int_env("USSD_HTTPX_MAX_KEEPALIVE_CONNECTIONS", 100)
+    keepalive_ttl = _float_env("USSD_HTTPX_KEEPALIVE_EXPIRY_SECS",    30.0)
+
+    _CLIENT = httpx.AsyncClient(
+        limits=httpx.Limits(
+            max_connections=max_conn,
+            max_keepalive_connections=max_keepalive,
+            keepalive_expiry=keepalive_ttl,
+        ),
+        # Default timeout is a safety net — the per-shortcode timeout
+        # in forward() overrides at call time. Keep it generous here so
+        # ops can override upward via env without editing code.
+        timeout=httpx.Timeout(connect=3.0, read=15.0, write=5.0, pool=5.0),
+        # Explicit HTTP/1.1 — PHP handlers don't speak h2 and enabling
+        # it here would force httpx to do ALPN on every new connection
+        # for nothing.
+        http2=False,
+        # No transport retries: we count each attempt in metrics and
+        # decide our own retry policy in the caller (which today is
+        # "just fail the leg" — that's fine).
+        transport=httpx.AsyncHTTPTransport(retries=0),
+    )
+    LOGGER.info(
+        "forwarder httpx client ready max_conn=%d max_keepalive=%d expiry=%.1fs",
+        max_conn, max_keepalive, keepalive_ttl,
+    )
+
+
+async def close_forwarder() -> None:
+    """Drain and close the shared client at shutdown."""
+    global _CLIENT
+    if _CLIENT is None:
+        return
+    try:
+        await _CLIENT.aclose()
+    except Exception:
+        LOGGER.exception("forwarder client close failed")
+    finally:
+        _CLIENT = None
+        LOGGER.info("forwarder httpx client closed")
+
+
+def sample_pool_gauges() -> None:
+    """Poll the shared httpx pool and publish its live state to
+    Prometheus gauges. Called from the /metrics endpoint so scrapes
+    reflect the current pool without a background poller.
+
+    httpx doesn't expose a public pool-inspection API, so we probe
+    the underlying httpcore pool defensively — any AttributeError just
+    yields zero (better than crashing the scrape).
+    """
+    inuse = 0
+    keepalive = 0
+    try:
+        if _CLIENT is not None:
+            transport = getattr(_CLIENT, "_transport", None)
+            pool = getattr(transport, "_pool", None) if transport is not None else None
+            connections = getattr(pool, "_connections", None) if pool is not None else None
+            if connections is not None:
+                for c in connections:
+                    # httpcore's AsyncHTTPConnection exposes _has_expired
+                    # and is_idle(); we treat "idle & alive" as keepalive
+                    # and "not idle" as in-use.
+                    try:
+                        is_idle = c.is_idle()
+                    except Exception:
+                        is_idle = False
+                    if is_idle:
+                        keepalive += 1
+                    else:
+                        inuse += 1
+    except Exception:
+        # SWALLOW: pool internals are unofficial. If they change shape,
+        # the scrape returns zero — visible in Grafana but doesn't
+        # break the /metrics endpoint.
+        LOGGER.debug("httpx pool sampling failed", exc_info=True)
+    FORWARDER_HTTP_CONNECTIONS_INUSE.set(inuse)
+    FORWARDER_HTTP_CONNECTIONS_KEEPALIVE.set(keepalive)
 
 
 def _coerce_action(raw) -> Action | None:
@@ -160,11 +303,32 @@ async def forward(
     LOGGER.debug("  full request payload: %s", payload_json[:_LOG_BODY_TRUNC])
 
     t0 = time.monotonic()
+    if _CLIENT is None:
+        # Shouldn't happen — lifespan wires init_forwarder() at startup.
+        # Fall back to a one-shot client so a mis-wired test doesn't
+        # crash, but log loudly so it's noticed.
+        LOGGER.warning("forwarder client uninitialised; using one-shot fallback")
+        init_forwarder()
+    assert _CLIENT is not None  # narrow for type-checkers
+
+    # Metric labels — bounded cardinality by construction (shortcode
+    # values are enumerated in the DB, event has three values). We
+    # increment the hop counter unconditionally so error paths also
+    # register in the arrivals rate.
+    _lbl_op = ur.operator or "unknown"
+    _lbl_sc = sc.code or "unknown"
+    _lbl_ev = ur.event.value
+    USSD_HOP_TOTAL.labels(_lbl_op, _lbl_sc, _lbl_ev).inc()
+
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(sc.handler_url, json=payload, headers=headers)
+        resp = await _CLIENT.post(
+            sc.handler_url, json=payload, headers=headers,
+            timeout=timeout,   # per-shortcode override
+        )
     except httpx.TimeoutException as exc:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+        USSD_HOP_LATENCY_SECONDS.labels(_lbl_op, _lbl_sc, _lbl_ev).observe(elapsed_ms / 1000.0)
+        USSD_HANDLER_ERRORS_TOTAL.labels(_lbl_op, _lbl_sc, "timeout").inc()
         LOGGER.error(
             "✗ handler TIMEOUT shortcode=%s url=%s session=%s elapsed=%dms "
             "limit=%ss: %s",
@@ -176,6 +340,8 @@ async def forward(
         )
     except httpx.RequestError as exc:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+        USSD_HOP_LATENCY_SECONDS.labels(_lbl_op, _lbl_sc, _lbl_ev).observe(elapsed_ms / 1000.0)
+        USSD_HANDLER_ERRORS_TOTAL.labels(_lbl_op, _lbl_sc, "transport").inc()
         LOGGER.error(
             "✗ handler TRANSPORT-ERROR shortcode=%s url=%s session=%s "
             "elapsed=%dms class=%s: %s",
@@ -188,6 +354,7 @@ async def forward(
         )
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
+    USSD_HOP_LATENCY_SECONDS.labels(_lbl_op, _lbl_sc, _lbl_ev).observe(elapsed_ms / 1000.0)
     body_text = resp.text or ""
     # Try to capture the response body in a JSON-friendly form for the
     # log table (even when we couldn't parse it as a UnifiedReply, the
@@ -204,6 +371,7 @@ async def forward(
     LOGGER.debug("  full response body: %s", body_text[:_LOG_BODY_TRUNC])
 
     if resp.status_code >= 400:
+        USSD_HANDLER_ERRORS_TOTAL.labels(_lbl_op, _lbl_sc, "non2xx").inc()
         LOGGER.error(
             "✗ handler HTTP %d shortcode=%s url=%s session=%s elapsed=%dms "
             "body=%r",
@@ -219,6 +387,7 @@ async def forward(
 
     reply, err = _parse_handler_reply(resp.status_code, body_text)
     if reply is None:
+        USSD_HANDLER_ERRORS_TOTAL.labels(_lbl_op, _lbl_sc, err or "unparseable").inc()
         LOGGER.error(
             "✗ handler UNPARSEABLE shortcode=%s url=%s session=%s "
             "status=%d elapsed=%dms reason=%s body=%r",

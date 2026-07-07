@@ -1,0 +1,15 @@
+# Grafana datasource — provisioned on first boot from a config file
+# so ops don't have to click through the UI on every fresh deploy.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://localhost:9091
+    isDefault: true
+    editable: false
+    jsonData:
+      # Match the scrape interval in prometheus.yml — Grafana uses
+      # this to hint its rate() range windows.
+      timeInterval: "15s"

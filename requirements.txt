@@ -4,6 +4,11 @@ psycopg2-binary==2.9.10
 bcrypt==4.2.1
 httpx==0.27.2
 PyYAML==6.0.2
+# Prometheus client — powers the /metrics endpoint (see app/metrics.py).
+# Multiprocess mode is on so all uvicorn worker processes contribute
+# to the same set of counters/histograms; see app/main.py for how
+# PROMETHEUS_MULTIPROC_DIR is initialised at container start.
+prometheus-client==0.21.0
 # Required by Starlette's `req.form()` — called from adapters/_common.py
 # when the inbound POST has Content-Type: application/x-www-form-urlencoded
 # (Vodacom-via-glpvodaUssd proxy + Tigo/Airtel form-style requests).

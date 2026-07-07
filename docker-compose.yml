@@ -208,7 +208,12 @@ services:
       EXPORTS_POLL_INTERVAL_MS:          ${EXPORTS_POLL_INTERVAL_MS:-3000}
       EXPORTS_CHUNK_SIZE:                ${EXPORTS_CHUNK_SIZE:-10000}
       EXPORTS_REAP_AFTER_SECONDS:        ${EXPORTS_REAP_AFTER_SECONDS:-600}
-      EXPORTS_RETENTION_DAYS:            ${EXPORTS_RETENTION_DAYS:-7}
+      # Retention (canonical env: hours). The worker keeps
+      # EXPORTS_RETENTION_DAYS as a backwards-compat fallback (see
+      # computeRetentionHours in exports_worker.mjs); ONLY set
+      # DAYS below when you want a legacy override, otherwise leave
+      # it out so the HOURS knob wins cleanly.
+      EXPORTS_RETENTION_HOURS:           ${EXPORTS_RETENTION_HOURS:-12}
       EXPORTS_MAINTENANCE_INTERVAL_MS:   ${EXPORTS_MAINTENANCE_INTERVAL_MS:-60000}
       NODE_ENV: production
     volumes:
@@ -231,8 +236,107 @@ services:
       disable: true
     command: ["node", "worker/exports_worker.mjs"]
 
+  #*******ADD MONITORING HERE******************************
+  # ----------------------------------------------------------------
+  # Observability stack — Prometheus, Grafana, node-exporter, cAdvisor.
+  #
+  # Prometheus scrapes:
+  #   * the gateway itself       — app-level metrics from /metrics
+  #     (USSD hops, latency histograms, log-writer queue depth, HTTP
+  #     request counts) — see app/metrics.py.
+  #   * node-exporter            — host-level CPU, RAM, disk, network.
+  #   * cAdvisor                 — per-container CPU / memory / IO
+  #     rates + up/down state for every running container on the host.
+  #
+  # Grafana is provisioned from monitoring/grafana/provisioning/ with
+  # a Prometheus datasource and a starter USSD-gateway dashboard.
+  # First-boot admin password comes from GRAFANA_ADMIN_PASSWORD in
+  # .env (or defaults to 'admin' — CHANGE ON FIRST DEPLOY).
+  # ----------------------------------------------------------------
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: ussd-prometheus
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      # Retention — 30 days keeps ~4 weeks of trend history for
+      # capacity conversations without ballooning disk. Bump if you
+      # need longer for postmortems, and watch the tsdb size.
+      - "--storage.tsdb.retention.time=30d"
+      # Bind to a non-default port so Prometheus doesn't collide with
+      # anything on 9090; adjust to 9090 if you have nothing else
+      # using it.
+      - "--web.listen-address=0.0.0.0:9091"
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: ussd-node-exporter
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    # node-exporter needs read-only access to the host's proc/sys/root
+    # filesystems to report CPU / RAM / disk / network numbers.
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro,rslave
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      # Ignore the pseudo-filesystems Prometheus doesn't care about
+      # (tmpfs, overlay, cgroup) so the mount count stays scannable.
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/.+)($$|/)"
+      - "--web.listen-address=0.0.0.0:9100"
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: ussd-cadvisor
+    restart: unless-stopped
+    network_mode: host
+    # cAdvisor needs read access to Docker's runtime dirs to report
+    # per-container state (up/down, CPU, RAM, IO, network).
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    devices:
+      - /dev/kmsg
+    command:
+      - "--port=8082"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: ussd-grafana
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      GF_SECURITY_ADMIN_USER:     ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Grafana on :3002 so it doesn't collide with the dashboard's
+      # Next.js on :3000 (or any local proxy on :3000). Change here
+      # if you free up 3000/3001.
+      GF_SERVER_HTTP_PORT:        "3002"
+      # Anonymous read-only access can be flipped on by ops later if
+      # they want a public read-only stat wall on the office TV.
+      GF_AUTH_ANONYMOUS_ENABLED:  "false"
+
 # Named volume shared between the dashboard (writes the file path
 # into portal_exports.file_path and streams it on /api/exports/<id>/
 # download) and the worker (produces the CSV here).
 volumes:
   ussd_exports:
+  prometheus_data:
+  grafana_data:

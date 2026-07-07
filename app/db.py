@@ -16,15 +16,27 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import queue
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras
 from psycopg2.pool import ThreadedConnectionPool
 
 from .config import PgConfig
+from .metrics import (
+    SESSION_LOG_BATCH_FLUSH_FAILURES_TOTAL,
+    SESSION_LOG_BATCH_SIZE,
+    SESSION_LOG_BATCHES_FLUSHED_TOTAL,
+    SESSION_LOG_QUEUE_DEPTH,
+    SESSION_LOG_ROWS_DROPPED_TOTAL,
+    SESSION_LOG_ROWS_ENQUEUED_TOTAL,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -291,6 +303,219 @@ def _redact_payload(p: Optional[dict]) -> Optional[dict]:
     }
 
 
+# ------------------------------------------------------------------
+# Async session-log writer
+# ------------------------------------------------------------------
+# `log_leg()` used to open a pool connection and do a synchronous
+# INSERT per hop on the caller's thread. Under load, that:
+#   * Held a psycopg2 pool slot per hop (starving other queries).
+#   * Blocked FastAPI's thread executor slot for the whole DB RTT.
+#   * Bounced up-and-down through the connection pool, doing a
+#     BEGIN + COMMIT on every single row (10-30 ms round-trip each).
+#
+# Now `log_leg()` is a thin thread-safe enqueue onto a bounded
+# `queue.Queue`. A background writer thread drains the queue,
+# opportunistically batches up to `_BATCH_MAX` rows or waits at
+# most `_BATCH_LATENCY_SECS` seconds, and does one multi-row
+# `execute_values` INSERT in a single transaction.
+#
+# The MNO response path never blocks on Postgres. If Postgres is
+# down, rows queue in memory until either the queue fills (excess
+# rows are dropped with a warning) or the DB recovers.
+
+_INSERT_COLS: Tuple[str, ...] = (
+    "operator_id", "operator_name", "shortcode_id", "service_code",
+    "session_id", "msisdn", "ussd_string", "direction",
+    "raw_request_payload", "raw_response_payload",
+    "handler_url", "handler_status_code",
+    "handler_response_action", "handler_response_text",
+    "handler_elapsed_ms", "error_class", "error_detail",
+)
+
+# `%s::jsonb` for the JSONB columns; the rest are plain %s.
+_INSERT_ROW_TEMPLATE = (
+    "(%s, %s, %s, %s,"
+    " %s, %s, %s, %s,"
+    " %s::jsonb, %s::jsonb,"
+    " %s, %s,"
+    " %s, %s,"
+    " %s, %s, %s)"
+)
+_INSERT_STMT_PREFIX = (
+    "INSERT INTO ussd_session_logs (" + ", ".join(_INSERT_COLS) + ") VALUES "
+)
+
+# Queue + writer state (module-level singletons — one per worker
+# process, which is what we want).
+_LOG_QUEUE: "queue.Queue[Tuple[Any, ...]] | None" = None
+_LOG_WRITER: Optional[threading.Thread] = None
+_LOG_SHUTDOWN = threading.Event()
+
+# A sentinel None on the queue means "shutdown after draining what's
+# already queued". We use type-Optional[Tuple] instead of a magic value
+# so the writer's loop stays readable.
+_LOG_QUEUE_SENTINEL = None
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        n = int(raw)
+        return n if n > 0 else default
+    except ValueError:
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+# Queue size — drop-on-overflow. 20 000 rows is roughly 30 seconds of
+# peak traffic; if the writer can't drain in that window, Postgres is
+# in trouble and dropping is preferable to unbounded RAM growth.
+_QUEUE_SIZE       = _int_env("USSD_LOG_QUEUE_SIZE",              20_000)
+# Max rows in one INSERT. Postgres handles multi-thousand-row inserts
+# fine, but a smaller batch = smaller retry blast-radius on a
+# transient error mid-flush.
+_BATCH_MAX        = _int_env("USSD_LOG_BATCH_MAX",                  500)
+# Max wait before flushing whatever we have. Balances per-row latency
+# for the audit trail against per-INSERT overhead.
+_BATCH_LATENCY_SECS = _float_env("USSD_LOG_BATCH_LATENCY_SECS",   0.250)
+
+
+def _writer_loop() -> None:
+    """Drain the queue in batches until told to stop.
+
+    Runs on a dedicated OS thread — one BEGIN + one COMMIT per batch,
+    one psycopg2 connection borrowed for the batch's lifetime, then
+    returned to the pool. Errors are logged but never re-raised; the
+    thread's contract is "keep running until shutdown."
+    """
+    assert _LOG_QUEUE is not None
+    LOGGER.info(
+        "ussd_session_logs async writer starting queue_size=%d batch_max=%d "
+        "latency=%.3fs",
+        _QUEUE_SIZE, _BATCH_MAX, _BATCH_LATENCY_SECS,
+    )
+    stopping = False
+    while not stopping:
+        # Block until at least one row appears (or shutdown).
+        first = _LOG_QUEUE.get()
+        if first is _LOG_QUEUE_SENTINEL:
+            stopping = True
+            batch: List[Tuple[Any, ...]] = []
+        else:
+            batch = [first]
+
+        # Opportunistically grab more without blocking, or wait up to
+        # _BATCH_LATENCY_SECS for the batch to grow. This keeps p95
+        # audit-row latency below ~half a second while amortising
+        # commit cost.
+        deadline = time.monotonic() + _BATCH_LATENCY_SECS
+        while len(batch) < _BATCH_MAX:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                row = _LOG_QUEUE.get(timeout=remaining)
+            except queue.Empty:
+                break
+            if row is _LOG_QUEUE_SENTINEL:
+                stopping = True
+                break
+            batch.append(row)
+
+        if not batch:
+            continue
+
+        try:
+            _flush_batch(batch)
+            SESSION_LOG_BATCHES_FLUSHED_TOTAL.inc()
+            SESSION_LOG_BATCH_SIZE.observe(len(batch))
+        except Exception:
+            # SWALLOW: nothing upstream can recover if we drop rows
+            # here, and re-raising would kill the writer thread and
+            # eventually the queue would fill up + start dropping
+            # newly-arriving rows too. Log + move on.
+            SESSION_LOG_BATCH_FLUSH_FAILURES_TOTAL.inc()
+            LOGGER.exception(
+                "ussd_session_logs writer flush failed (dropped %d row(s))",
+                len(batch),
+            )
+        # Refresh the depth gauge after every flush so the metric
+        # tracks how much backlog is sitting in memory.
+        if _LOG_QUEUE is not None:
+            SESSION_LOG_QUEUE_DEPTH.set(_LOG_QUEUE.qsize())
+
+    LOGGER.info("ussd_session_logs async writer stopped")
+
+
+def _flush_batch(batch: List[Tuple[Any, ...]]) -> None:
+    """One multi-row INSERT for the whole batch."""
+    if not batch:
+        return
+    # Build "(%s,%s,…),(%s,%s,…),…" with N copies of the row template,
+    # then flatten the batch into a single params tuple. Not using
+    # `psycopg2.extras.execute_values` because our template has the
+    # `%s::jsonb` cast — execute_values wants a single placeholder set
+    # without casts.
+    values_sql = ",".join(_INSERT_ROW_TEMPLATE for _ in batch)
+    flat_params: List[Any] = []
+    for row in batch:
+        flat_params.extend(row)
+    stmt = _INSERT_STMT_PREFIX + values_sql
+    with _conn() as c, c.cursor() as cur:
+        cur.execute(stmt, flat_params)
+
+
+def init_log_writer() -> None:
+    """Start the writer thread + queue at app startup. Idempotent."""
+    global _LOG_QUEUE, _LOG_WRITER
+    if _LOG_WRITER is not None and _LOG_WRITER.is_alive():
+        return
+    _LOG_SHUTDOWN.clear()
+    _LOG_QUEUE = queue.Queue(maxsize=_QUEUE_SIZE)
+    _LOG_WRITER = threading.Thread(
+        target=_writer_loop,
+        name="ussd-session-log-writer",
+        daemon=True,
+    )
+    _LOG_WRITER.start()
+
+
+def close_log_writer(timeout_secs: float = 5.0) -> None:
+    """Signal shutdown and wait for the writer to drain what's queued.
+
+    A short join timeout is intentional — if the writer is stuck on a
+    slow DB call, waiting forever would block container shutdown, and
+    losing the last few audit rows is preferable to a stuck process.
+    """
+    global _LOG_QUEUE, _LOG_WRITER
+    if _LOG_QUEUE is None or _LOG_WRITER is None:
+        return
+    try:
+        _LOG_QUEUE.put_nowait(_LOG_QUEUE_SENTINEL)
+    except queue.Full:
+        LOGGER.warning("log queue full at shutdown — writer may not drain")
+    _LOG_WRITER.join(timeout=timeout_secs)
+    if _LOG_WRITER.is_alive():
+        LOGGER.warning(
+            "ussd_session_logs writer didn't drain within %.1fs — abandoning",
+            timeout_secs,
+        )
+    _LOG_WRITER = None
+    _LOG_QUEUE = None
+
+
 def log_leg(
     *,
     operator_id: int,
@@ -311,42 +536,49 @@ def log_leg(
     error_class: Optional[str] = None,
     error_detail: Optional[str] = None,
 ) -> None:
-    """Best-effort row insert. A DB hiccup must NOT break the MNO
-    response path — we log + swallow so the user still gets their
-    USSD reply. Production retention is a separate concern (Phase 4
-    monthly partitioning + a sweeper)."""
-    sql = """
-        INSERT INTO ussd_session_logs
-            (operator_id, operator_name, shortcode_id, service_code,
-             session_id, msisdn, ussd_string, direction,
-             raw_request_payload, raw_response_payload,
-             handler_url, handler_status_code,
-             handler_response_action, handler_response_text,
-             handler_elapsed_ms, error_class, error_detail)
-        VALUES
-            (%s, %s, %s, %s,
-             %s, %s, %s, %s,
-             %s::jsonb, %s::jsonb,
-             %s, %s,
-             %s, %s,
-             %s, %s, %s)
+    """Best-effort row enqueue. Never blocks the response path.
+
+    Rows land on the async writer's queue and are flushed to Postgres
+    in batches (see the writer notes above). If the queue is full
+    (Postgres wedged and we've backed up 20 k rows), we log a warning
+    and drop the row — the customer still gets their USSD reply.
     """
+    row: Tuple[Any, ...] = (
+        operator_id, operator_name, shortcode_id, service_code,
+        session_id, msisdn, ussd_string, direction,
+        json.dumps(_redact_payload(raw_request_payload)) if raw_request_payload else None,
+        json.dumps(_redact_payload(raw_response_payload)) if raw_response_payload else None,
+        handler_url, handler_status_code,
+        handler_response_action, handler_response_text,
+        handler_elapsed_ms, error_class, error_detail,
+    )
+    if _LOG_QUEUE is None:
+        # init_log_writer() wasn't called — either we're in a test
+        # that hits this path directly, or startup order is wrong.
+        # Fall back to a synchronous insert so we don't silently
+        # discard the row.
+        LOGGER.warning(
+            "log_leg called before init_log_writer(); doing synchronous insert"
+        )
+        try:
+            _flush_batch([row])
+        except Exception:
+            LOGGER.exception(
+                "ussd_session_logs sync fallback failed session_id=%s op=%s",
+                session_id, operator_name,
+            )
+        return
     try:
-        with _conn() as c, c.cursor() as cur:
-            cur.execute(sql, (
-                operator_id, operator_name, shortcode_id, service_code,
-                session_id, msisdn, ussd_string, direction,
-                json.dumps(_redact_payload(raw_request_payload)) if raw_request_payload else None,
-                json.dumps(_redact_payload(raw_response_payload)) if raw_response_payload else None,
-                handler_url, handler_status_code,
-                handler_response_action, handler_response_text,
-                handler_elapsed_ms, error_class, error_detail,
-            ))
-    except Exception:
-        # SWALLOW. The MNO already got our reply; this row is a post-
-        # hoc audit record. A persistent failure here = paged alarm,
-        # but does not affect customers.
-        LOGGER.exception(
-            "ussd_session_logs INSERT failed (swallowed) session_id=%s op=%s",
+        _LOG_QUEUE.put_nowait(row)
+        SESSION_LOG_ROWS_ENQUEUED_TOTAL.inc()
+        # `qsize` is approximate under concurrency, which is fine — the
+        # gauge is for trend visibility, not for precise accounting.
+        SESSION_LOG_QUEUE_DEPTH.set(_LOG_QUEUE.qsize())
+    except queue.Full:
+        # DROP: the MNO already has its reply. Log so ops see this in
+        # real time if Postgres wedges.
+        SESSION_LOG_ROWS_DROPPED_TOTAL.inc()
+        LOGGER.warning(
+            "ussd_session_logs queue full; dropping row session_id=%s op=%s",
             session_id, operator_name,
         )
