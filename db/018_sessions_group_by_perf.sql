@@ -99,17 +99,29 @@ BEGIN;
 CREATE INDEX IF NOT EXISTS idx_ussd_logs_session_op_ts_desc
     ON ONLY ussd_session_logs (session_id, operator_name, ts DESC);
 
--- (2) Reconcile every existing child partition:
---   * CREATE INDEX IF NOT EXISTS on the child (idempotent).
---   * ATTACH the child index to the parent template — but only
---     when it isn't already attached (repeat ATTACH would error).
--- Fresh install: partitions are empty, so CREATE INDEX is
--- instantaneous. Post-CONCURRENTLY-dance production: everything is
--- already in place, so this is a series of pg_catalog no-ops.
+-- (2) Reconcile every existing child partition.
+--
+-- Two possible starting states per partition:
+--   (a) Partition pre-dates the parent template — no attached child
+--       exists. We must CREATE INDEX + ATTACH.
+--   (b) Partition was created AFTER the parent template existed —
+--       PG auto-inherited: a child index was created and attached
+--       for us, with PG's default name shape
+--       `<partition>_<cols>_idx`, NOT our `<partition>__sess_op_ts_desc`
+--       convention. Attaching a SECOND index of any name to the same
+--       partition would raise `ObjectNotInPrerequisiteState:
+--       Another index is already attached for partition …`.
+--
+-- The check below therefore keys on the PARTITION, not the child
+-- index NAME: if the partition already has ANY child index attached
+-- to our parent template, skip it entirely. Otherwise CREATE +
+-- ATTACH with our naming convention (so the manual runbook and the
+-- helper in db/019 keep matching this shape).
 DO $$
 DECLARE
     child_relname text;
     child_idxname text;
+    already_reconciled boolean;
 BEGIN
     FOR child_relname IN
         SELECT c.relname
@@ -120,24 +132,30 @@ BEGIN
     LOOP
         child_idxname := child_relname || '__sess_op_ts_desc';
 
+        SELECT EXISTS (
+            SELECT 1
+              FROM pg_inherits pi
+              JOIN pg_class    ci        ON ci.oid       = pi.inhrelid
+              JOIN pg_index    xi        ON xi.indexrelid = ci.oid
+              JOIN pg_class    part      ON part.oid = xi.indrelid
+              JOIN pg_class    parent_i  ON parent_i.oid = pi.inhparent
+             WHERE part.relname     = child_relname
+               AND parent_i.relname = 'idx_ussd_logs_session_op_ts_desc'
+        ) INTO already_reconciled;
+
+        IF already_reconciled THEN
+            CONTINUE;
+        END IF;
+
         EXECUTE format(
             'CREATE INDEX IF NOT EXISTS %I ON %I (session_id, operator_name, ts DESC)',
             child_idxname, child_relname
         );
 
-        IF NOT EXISTS (
-            SELECT 1
-              FROM pg_inherits pi
-              JOIN pg_class    ci       ON ci.oid       = pi.inhrelid
-              JOIN pg_class    parent_i ON parent_i.oid = pi.inhparent
-             WHERE ci.relname       = child_idxname
-               AND parent_i.relname = 'idx_ussd_logs_session_op_ts_desc'
-        ) THEN
-            EXECUTE format(
-                'ALTER INDEX idx_ussd_logs_session_op_ts_desc ATTACH PARTITION %I',
-                child_idxname
-            );
-        END IF;
+        EXECUTE format(
+            'ALTER INDEX idx_ussd_logs_session_op_ts_desc ATTACH PARTITION %I',
+            child_idxname
+        );
     END LOOP;
 END $$;
 

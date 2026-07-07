@@ -56,6 +56,7 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     child_idxname text := partname || '__sess_op_ts_desc';
+    already_attached boolean;
 BEGIN
     -- Silent no-op when db/018 hasn't run yet — the parent template
     -- can't be attached to something that doesn't exist. db/018's
@@ -66,25 +67,44 @@ BEGIN
         RETURN;
     END IF;
 
+    -- If the partition ALREADY has a child index attached to the
+    -- parent template, we're done. This is the common path in
+    -- practice: PG 12+ auto-inherits parent indexes onto new
+    -- partitions at `CREATE TABLE ... PARTITION OF …` time, so by
+    -- the time this helper runs, an auto-generated child index
+    -- (`<partition>_<cols>_idx`) is already attached. Attempting a
+    -- second CREATE + ATTACH under our own name would then fail
+    -- with `Another index is already attached for partition …`.
+    --
+    -- The check keys on the PARTITION (not the index name) so it
+    -- correctly recognises PG's auto-inherited index alongside our
+    -- own reconcile-loop naming.
+    SELECT EXISTS (
+        SELECT 1
+          FROM pg_inherits pi
+          JOIN pg_class    ci        ON ci.oid       = pi.inhrelid
+          JOIN pg_index    xi        ON xi.indexrelid = ci.oid
+          JOIN pg_class    part      ON part.oid = xi.indrelid
+          JOIN pg_class    parent_i  ON parent_i.oid = pi.inhparent
+         WHERE part.relname     = partname
+           AND parent_i.relname = 'idx_ussd_logs_session_op_ts_desc'
+    ) INTO already_attached;
+
+    IF already_attached THEN
+        RETURN;
+    END IF;
+
+    -- Only reached when the partition somehow lacks an inherited
+    -- child (e.g. the parent template was created AFTER this
+    -- partition and the reconcile loop hasn't picked it up yet).
     EXECUTE format(
         'CREATE INDEX IF NOT EXISTS %I ON %I (session_id, operator_name, ts DESC)',
         child_idxname, partname
     );
-
-    -- Skip ATTACH if already attached — a second ATTACH errors.
-    IF NOT EXISTS (
-        SELECT 1
-          FROM pg_inherits pi
-          JOIN pg_class    ci       ON ci.oid       = pi.inhrelid
-          JOIN pg_class    parent_i ON parent_i.oid = pi.inhparent
-         WHERE ci.relname       = child_idxname
-           AND parent_i.relname = 'idx_ussd_logs_session_op_ts_desc'
-    ) THEN
-        EXECUTE format(
-            'ALTER INDEX idx_ussd_logs_session_op_ts_desc ATTACH PARTITION %I',
-            child_idxname
-        );
-    END IF;
+    EXECUTE format(
+        'ALTER INDEX idx_ussd_logs_session_op_ts_desc ATTACH PARTITION %I',
+        child_idxname
+    );
 END;
 $$;
 
