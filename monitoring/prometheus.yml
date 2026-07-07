@@ -1,19 +1,23 @@
 # Prometheus scrape configuration for UssdGatewayTz.
 #
-# Deployment topology (2 hosts):
-#   * DASHBOARD HOST  (vm-web-tz-svr) runs: dashboard, exports-worker,
-#     prometheus, grafana, node-exporter, cAdvisor.
-#   * GATEWAY HOST    (172.16.0.162)  runs: gateway, schedulers,
-#     node-exporter, cAdvisor.
+# Deployment topology (fleet):
+#   * 172.16.0.163  DASHBOARD host (this box) — dashboard, exports-
+#                   worker, prometheus, grafana, node-exporter, cAdvisor.
+#   * 172.16.0.162  GATEWAY host — gateway, schedulers, node-exporter,
+#                   cAdvisor.
+#   * 172.16.0.104  additional host — node-exporter + cAdvisor only.
+#   * 172.16.0.131  additional host — node-exporter + cAdvisor only.
 #
-# Prometheus lives on the dashboard host and scrapes the gateway host
-# across the network — the gateway host's firewall must allow TCP
-# 8082, 8280 and 9100 inbound from this dashboard host.
+# Prometheus lives on the dashboard host and scrapes each remote host
+# across the network — every scraped host's firewall must allow TCP
+# 9100 (node-exporter) and 8082 (cAdvisor) inbound from 172.16.0.163.
+# The gateway host additionally needs 8280 open (gateway /metrics).
 #
-# Every metric carries a `host` label ('dashboard' | 'gateway') so
-# Grafana can split panels per host or roll up across the fleet.
+# Every metric carries a `host` label (the box's IP) so Grafana can
+# split panels per host or roll up across the fleet.
 #
-# If the gateway IP changes, search-replace 172.16.0.162 below and
+# When adding another host: copy one of the target blocks in the
+# `node-exporter` and `cadvisor` jobs, set its IP, then
 # `docker compose restart prometheus`.
 
 global:
@@ -42,7 +46,7 @@ scrape_configs:
           service: gateway
           host:    172.16.0.162
 
-  # ----- Host CPU / RAM / disk / network — both hosts --------------
+  # ----- Host CPU / RAM / disk / network — every host in the fleet ---
   # One target per host. `host` label lets Grafana split.
   - job_name: node-exporter
     static_configs:
@@ -54,8 +58,16 @@ scrape_configs:
         labels:
           service: host
           host:    172.16.0.162
+      - targets: ["172.16.0.104:9100"]
+        labels:
+          service: host
+          host:    172.16.0.104
+      - targets: ["172.16.0.131:9100"]
+        labels:
+          service: host
+          host:    172.16.0.131
 
-  # ----- Per-container CPU / memory / IO / up-state — both hosts ---
+  # ----- Per-container CPU / memory / IO / up-state — every host ----
   # cAdvisor exposes one series per container per family; combined
   # with the `host` label you can see "which containers on which
   # host" at a glance.
@@ -69,6 +81,14 @@ scrape_configs:
         labels:
           service: containers
           host:    172.16.0.162
+      - targets: ["172.16.0.104:8082"]
+        labels:
+          service: containers
+          host:    172.16.0.104
+      - targets: ["172.16.0.131:8082"]
+        labels:
+          service: containers
+          host:    172.16.0.131
 
   # ----- Dashboard (optional) -----------------------------------
   # The Next.js dashboard doesn't ship a /metrics endpoint today.
