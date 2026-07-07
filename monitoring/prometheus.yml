@@ -1,63 +1,82 @@
 # Prometheus scrape configuration for UssdGatewayTz.
 #
-# All targets are on localhost because the compose services use
-# network_mode: host (matching the rest of the stack). Change the
-# targets if you split observability onto a separate compose network.
+# Deployment topology (2 hosts):
+#   * DASHBOARD HOST  (vm-web-tz-svr) runs: dashboard, exports-worker,
+#     prometheus, grafana, node-exporter, cAdvisor.
+#   * GATEWAY HOST    (172.16.0.162)  runs: gateway, schedulers,
+#     node-exporter, cAdvisor.
+#
+# Prometheus lives on the dashboard host and scrapes the gateway host
+# across the network — the gateway host's firewall must allow TCP
+# 8082, 8280 and 9100 inbound from this dashboard host.
+#
+# Every metric carries a `host` label ('dashboard' | 'gateway') so
+# Grafana can split panels per host or roll up across the fleet.
+#
+# If the gateway IP changes, search-replace 172.16.0.162 below and
+# `docker compose restart prometheus`.
 
 global:
   scrape_interval:     15s
   evaluation_interval: 15s
-  # External label that shows up on every series — makes it obvious
-  # which environment a copy-pasted graph came from.
   external_labels:
     env: production
     stack: ussd-gateway-tz
 
 scrape_configs:
 
-  # ----- Prometheus itself (self-observation) -------------------
+  # ----- Prometheus self-scrape (still one instance, on dashboard host) -
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9091"]
 
-  # ----- The USSD gateway app -----------------------------------
+  # ----- The USSD gateway app --------------------------------------
   # `/metrics` on the gateway aggregates counters across all uvicorn
-  # workers (multi-process mode; see app/metrics.py). One scrape
-  # target = one endpoint = one summed view.
+  # workers (multi-process mode; see app/metrics.py). Only exists on
+  # the gateway host.
   - job_name: ussd-gateway
     metrics_path: /metrics
     static_configs:
-      - targets: ["localhost:8280"]
+      - targets: ["172.16.0.162:8280"]
         labels:
           service: gateway
+          host:    gateway
 
-  # ----- Host-level: CPU / RAM / disk / network -----------------
-  # node-exporter runs with --pid=host so its numbers reflect the
-  # physical host, not the container.
+  # ----- Host CPU / RAM / disk / network — both hosts --------------
+  # One target per host. `host` label lets Grafana split.
   - job_name: node-exporter
     static_configs:
       - targets: ["localhost:9100"]
         labels:
           service: host
+          host:    dashboard
+      - targets: ["172.16.0.162:9100"]
+        labels:
+          service: host
+          host:    gateway
 
-  # ----- Per-container CPU / memory / IO / up-state -------------
-  # cAdvisor exposes one series per container per metric family.
-  # `container_last_seen` tells you which containers are running;
-  # combined with `up{}` on the other jobs you get "who is alive and
-  # who is dead" at a glance.
+  # ----- Per-container CPU / memory / IO / up-state — both hosts ---
+  # cAdvisor exposes one series per container per family; combined
+  # with the `host` label you can see "which containers on which
+  # host" at a glance.
   - job_name: cadvisor
     static_configs:
       - targets: ["localhost:8082"]
         labels:
           service: containers
+          host:    dashboard
+      - targets: ["172.16.0.162:8082"]
+        labels:
+          service: containers
+          host:    gateway
 
   # ----- Dashboard (optional) -----------------------------------
   # The Next.js dashboard doesn't ship a /metrics endpoint today.
-  # Once it does, uncomment this block — cAdvisor's per-container
-  # numbers cover its resource usage in the meantime.
-  # - job_name: dashboard
+  # Uncomment when it does.
+  # - job_name: dashboard-app
   #   metrics_path: /api/metrics
   #   static_configs:
   #     - targets: ["localhost:3000"]
   #       labels:
   #         service: dashboard
+  #         host:    dashboard
