@@ -1,0 +1,117 @@
+# RabbitMQ alerting rules.
+#
+# Metric names align with the `rabbitmq_prometheus` plugin bundled
+# with RabbitMQ 3.8+. Per-queue metrics come from the
+# `/metrics/detailed` endpoint (see prometheus.yml scrape configs).
+#
+# If your broker is on 3.9 or below and the `detailed` endpoint
+# doesn't exist, swap the queue expressions to `rabbitmq_queue_*`
+# names from the legacy `/metrics/per-object` endpoint.
+
+groups:
+
+  - name: rabbitmq-nodes
+    interval: 30s
+    rules:
+
+      - alert: RabbitMQNodeDown
+        expr: up{job="rabbitmq"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary:  "RabbitMQ node down on {{ $labels.host }}"
+          runbook:  "The Prometheus plugin endpoint (:15692) is unreachable. Check `systemctl status rabbitmq-server` on {{ $labels.host }} + `rabbitmq-diagnostics ping` + firewall."
+
+      - alert: RabbitMQMemoryAlarm
+        expr: rabbitmq_alarms_memory_used_watermark == 1
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary:  "RabbitMQ memory alarm on {{ $labels.host }}"
+          runbook:  "Broker is refusing publishes to free RAM. Drain consumers, then `rabbitmqctl set_vm_memory_high_watermark absolute 4GB` (or restart the node) if the memory pressure is real."
+
+      - alert: RabbitMQDiskAlarm
+        expr: rabbitmq_alarms_free_disk_space_watermark == 1
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary:  "RabbitMQ disk-space alarm on {{ $labels.host }}"
+          runbook:  "Broker is throttling publishes. Free disk space or `rabbitmqctl set_disk_free_limit 2GB` if the low watermark is set too high for the volume."
+
+      - alert: RabbitMQFileDescriptorsHigh
+        expr: |
+          rabbitmq_process_open_fds
+          /
+          rabbitmq_process_max_fds
+          > 0.85
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary:  "RabbitMQ on {{ $labels.host }} using > 85% of its file descriptors"
+          runbook:  "Common causes: too many client connections, or `net.core.somaxconn`/ulimit-nofile set too low. Raise the limit or find who's opening the sockets."
+
+      - alert: RabbitMQClusterPartitioned
+        # rabbitmq_cluster_partitions > 0 signals a net-split. The
+        # cluster is running degraded until manually reconciled.
+        expr: rabbitmq_cluster_partitions > 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary:  "RabbitMQ cluster partition on {{ $labels.host }}"
+          runbook:  "Net-split detected. Reconcile with `rabbitmqctl cluster_status` + decide which side keeps the data; restart the loser with `rabbitmqctl start_app` last."
+
+
+  - name: rabbitmq-queues
+    interval: 30s
+    rules:
+
+      - alert: RabbitMQQueueBacklog
+        # Any queue with > 1 000 unacked+ready messages that hasn't
+        # drained for 10 min. Adjust the number if your normal
+        # baseline is higher — see the Grafana dashboard's per-queue
+        # depth panel to size this to reality.
+        expr: rabbitmq_detailed_queue_messages > 1000
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary:  "RabbitMQ queue {{ $labels.queue }} backlog {{ $value | printf \"%.0f\" }} (vhost={{ $labels.vhost }}, host={{ $labels.host }})"
+          runbook:  "Consumers stopped or falling behind. Check consumer health; if publisher is genuinely faster than consumer, scale consumers."
+
+      - alert: RabbitMQQueueBacklogCritical
+        expr: rabbitmq_detailed_queue_messages > 50000
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary:  "RabbitMQ queue {{ $labels.queue }} > 50k messages (vhost={{ $labels.vhost }}, host={{ $labels.host }})"
+          runbook:  "Broker at risk of memory alarm / disk fill. Restart consumers, drop non-essential messages, or raise consumer count immediately."
+
+      - alert: RabbitMQQueueNoConsumers
+        # Depth > 0 but zero consumers = messages piling up with no
+        # one to eat them. Common signature of a downed worker.
+        expr: |
+          (rabbitmq_detailed_queue_messages > 0)
+          and
+          (rabbitmq_detailed_queue_consumers == 0)
+        for: 3m
+        labels: { severity: page }
+        annotations:
+          summary:  "RabbitMQ queue {{ $labels.queue }} has messages but 0 consumers (host={{ $labels.host }})"
+          runbook:  "Consumer service is down or disconnected. Confirm `docker ps` / `systemctl status` on the responsible worker."
+
+
+  - name: rabbitmq-flow
+    interval: 30s
+    rules:
+
+      - alert: RabbitMQPublishRateDropped
+        # Publish rate → 0 over a 10-min window when it was ≥ 1/s
+        # in the previous hour. Signals producer outage.
+        expr: |
+          sum by (host) (rate(rabbitmq_channel_messages_published_total[5m])) == 0
+          and
+          sum by (host) (avg_over_time(rate(rabbitmq_channel_messages_published_total[5m])[1h:5m])) > 1
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary:  "RabbitMQ publish rate on {{ $labels.host }} dropped to 0 (was steady prior hour)"
+          runbook:  "Producer service likely down. Confirm from the producing app's own metrics / logs; broker itself is probably fine."

@@ -102,6 +102,47 @@ scrape_configs:
           service: containers
           host:    172.16.0.131
 
+  # ----- RabbitMQ nodes ---------------------------------------------
+  # `rabbitmq_prometheus` plugin (bundled with RabbitMQ 3.8+) exposes
+  # aggregated cluster + vhost metrics on :15692/metrics. Enable on
+  # the target host with:
+  #     rabbitmq-plugins enable rabbitmq_prometheus
+  # then open :15692 to Prometheus's IP.
+  - job_name: rabbitmq
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["172.16.0.131:15692"]
+        labels:
+          service: rabbitmq
+          host:    172.16.0.131
+      - targets: ["172.16.0.44:15692"]
+        labels:
+          service: rabbitmq
+          host:    172.16.0.44
+
+  # ----- RabbitMQ per-object detail (per-queue depth, per-exchange
+  #       throughput). Same nodes but the `detailed` endpoint. This
+  #       is heavier — scrape less often and only if the queue count
+  #       is bounded (< a few hundred). Broker versions ≥ 3.10:
+  #         /metrics/detailed
+  #       Older 3.8-3.9:
+  #         /metrics/per-object
+  #       Adjust `metrics_path` if your broker is on 3.9 or below.
+  - job_name: rabbitmq-per-queue
+    scrape_interval: 30s
+    metrics_path: /metrics/detailed
+    params:
+      family: [queue_coarse_metrics, queue_metrics, queue_consumer_count]
+    static_configs:
+      - targets: ["172.16.0.131:15692"]
+        labels:
+          service: rabbitmq
+          host:    172.16.0.131
+      - targets: ["172.16.0.44:15692"]
+        labels:
+          service: rabbitmq
+          host:    172.16.0.44
+
   # ----- Dashboard (optional) -----------------------------------
   # The Next.js dashboard doesn't ship a /metrics endpoint today.
   # Uncomment when it does.

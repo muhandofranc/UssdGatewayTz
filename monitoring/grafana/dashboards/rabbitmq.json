@@ -1,0 +1,269 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "iteration": 1,
+  "links": [
+    { "title": "USSD Gateway — fleet overview",  "type": "link", "icon": "dashboard", "url": "/d/ussd-gateway-overview/ussd-gateway-overview" },
+    { "title": "USSD Gateway — per-host details", "type": "link", "icon": "dashboard", "url": "/d/ussd-gateway-per-host/ussd-gateway-per-host" }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "RabbitMQ nodes — $host",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Node up",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "orientation": "horizontal" },
+      "targets": [
+        { "expr": "up{job=\"rabbitmq\", host=\"$host\"}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Memory alarm",
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OK",   "color": "green" }, "1": { "text": "FIRE", "color": "red" } } }
+          ]
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [
+        { "expr": "rabbitmq_alarms_memory_used_watermark{host=\"$host\"}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Disk alarm",
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "OK",   "color": "green" }, "1": { "text": "FIRE", "color": "red" } } }
+          ]
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "targets": [
+        { "expr": "rabbitmq_alarms_free_disk_space_watermark{host=\"$host\"}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Connections",
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "rabbitmq_connections{host=\"$host\"}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Channels",
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "rabbitmq_channels{host=\"$host\"}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Queues",
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "rabbitmq_queues{host=\"$host\"}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Message flow",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 6 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Publish / deliver / ack rate (msg/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        { "expr": "sum (rate(rabbitmq_channel_messages_published_total{host=\"$host\"}[1m]))",       "legendFormat": "publish",  "refId": "A" },
+        { "expr": "sum (rate(rabbitmq_channel_messages_delivered_total{host=\"$host\"}[1m]))",       "legendFormat": "deliver",  "refId": "B" },
+        { "expr": "sum (rate(rabbitmq_channel_messages_acked_total{host=\"$host\"}[1m]))",           "legendFormat": "ack",      "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Total messages ready / unacked",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        { "expr": "sum (rabbitmq_queue_messages_ready{host=\"$host\"})",       "legendFormat": "ready",    "refId": "A" },
+        { "expr": "sum (rabbitmq_queue_messages_unacked{host=\"$host\"})",     "legendFormat": "unacked",  "refId": "B" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Per-queue depth + consumers",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue depth per queue (top 15)",
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 16 },
+      "datasource": "Prometheus",
+      "description": "Messages waiting in each queue. Sustained non-zero = consumer keeping up; rising = falling behind.",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "topk(15, rabbitmq_detailed_queue_messages{host=\"$host\"})",
+          "legendFormat": "{{vhost}}/{{queue}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Queues — depth + consumers",
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 16 },
+      "datasource": "Prometheus",
+      "description": "Instant snapshot per queue. Red = > 1 000 messages piled up. `consumers=0` on a non-empty queue = alerting condition.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 1000 },
+              { "color": "red",    "value": 10000 }
+            ]
+          },
+          "custom": { "align": "left" }
+        }
+      },
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": { "mode": "columns", "keepLabels": ["queue", "vhost"] }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "job": true, "instance": true, "service": true, "host": true, "__name__": true },
+            "renameByName": { "Value": "messages" },
+            "indexByName":  { "queue": 0, "vhost": 1, "Value": 2 }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "expr": "rabbitmq_detailed_queue_messages{host=\"$host\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Consumers per queue",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
+      "datasource": "Prometheus",
+      "description": "How many consumers are attached to each queue. Zero on an actively-fed queue is an outage signature.",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "rabbitmq_detailed_queue_consumers{host=\"$host\"}",
+          "legendFormat": "{{vhost}}/{{queue}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Node health",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory used (bytes)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        { "expr": "rabbitmq_process_resident_memory_bytes{host=\"$host\"}", "legendFormat": "resident",       "refId": "A" },
+        { "expr": "rabbitmq_process_max_memory_bytes{host=\"$host\"}",       "legendFormat": "high watermark", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "File descriptors used / max",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        { "expr": "rabbitmq_process_open_fds{host=\"$host\"}", "legendFormat": "open",  "refId": "A" },
+        { "expr": "rabbitmq_process_max_fds{host=\"$host\"}",  "legendFormat": "max",   "refId": "B" }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["rabbitmq"],
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": { "query": "label_values(up{job=\"rabbitmq\"}, host)", "refId": "host" },
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": { "text": "172.16.0.131", "value": "172.16.0.131" },
+        "description": "Filter every panel to a single RabbitMQ node."
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "RabbitMQ — per-node overview",
+  "uid": "rabbitmq-overview",
+  "version": 1,
+  "weekStart": ""
+}
