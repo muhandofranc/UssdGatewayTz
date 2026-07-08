@@ -107,15 +107,21 @@
     },
     {
       "type": "timeseries",
-      "title": "CPU %",
+      "title": "CPU % — by mode",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
       "datasource": "Prometheus",
+      "description": "One line per CPU mode (user, system, iowait, etc.). `used` = 100 - idle. If this panel is empty, node-exporter isn't scraping this host — check the Targets page in Prometheus.",
       "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } },
       "targets": [
         {
-          "expr": "100 - (avg by (mode) (rate(node_cpu_seconds_total{host=\"$host\", mode!=\"idle\"}[1m])) * 0 + 100 - avg (rate(node_cpu_seconds_total{host=\"$host\", mode=\"idle\"}[1m])) * 100)",
-          "legendFormat": "used",
+          "expr": "avg without (cpu) (rate(node_cpu_seconds_total{host=\"$host\", mode!=\"idle\"}[5m])) * 100",
+          "legendFormat": "{{mode}}",
           "refId": "A"
+        },
+        {
+          "expr": "100 - (avg without (cpu) (rate(node_cpu_seconds_total{host=\"$host\", mode=\"idle\"}[5m])) * 100)",
+          "legendFormat": "used",
+          "refId": "B"
         }
       ]
     },
