@@ -75,7 +75,9 @@ receivers:
         # Slightly-nicer HTML body than the default template. Keeps
         # the raw values so on-call can copy-paste them into curl:
         headers:
-          Subject: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }} — {{ .CommonLabels.host | default "fleet" }}'
+          # Alertmanager templates use Go text/template — no sprig's
+          # `default`. Fall back with `if/else` instead.
+          Subject: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }} — {{ if .CommonLabels.host }}{{ .CommonLabels.host }}{{ else }}fleet{{ end }}'
         html: |
           {{ range .Alerts }}
           <p><b>{{ .Annotations.summary }}</b></p>

@@ -293,19 +293,56 @@ services:
   # real destination and `docker compose restart alertmanager`.
   # See the comments at the top of that file for the common shapes.
   # ----------------------------------------------------------------
+  # ----------------------------------------------------------------
+  # One-shot init that materialises Alertmanager's runtime secrets
+  # from env vars (set in .env — never committed) into a shared
+  # named volume. Alertmanager then mounts that volume read-only
+  # and reads each secret via its `*_file:` config field.
+  #
+  # Add a new secret: define its env var, add a line here that
+  # writes it to a file in /secrets, and reference the file from
+  # alertmanager.yml. The container is idempotent — safe to re-run.
+  # ----------------------------------------------------------------
+  alertmanager-init:
+    image: busybox:1.36
+    container_name: ussd-alertmanager-init
+    restart: "no"
+    environment:
+      # `?required` makes compose refuse to start with a helpful error
+      # message if the var is missing from .env, rather than silently
+      # rendering an empty password file.
+      ALERTMANAGER_SMTP_PASSWORD: ${ALERTMANAGER_SMTP_PASSWORD?required in .env}
+    volumes:
+      - alertmanager_secrets:/secrets
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        # `printf` (not `echo`) — no trailing newline. Every SMTP
+        # server treats a trailing \n as part of the password and
+        # then rejects with "auth invalid".
+        printf '%s' "$$ALERTMANAGER_SMTP_PASSWORD" > /secrets/smtp_password
+        chmod 600 /secrets/smtp_password
+        # Alertmanager's container runs as UID 65534 (`nobody`) —
+        # match ownership so the file is readable there.
+        chown 65534:65534 /secrets/smtp_password
+        echo "smtp_password rendered ($$(wc -c < /secrets/smtp_password) bytes, owned 65534:65534)"
+
   alertmanager:
     image: prom/alertmanager:v0.27.0
     container_name: ussd-alertmanager
     restart: unless-stopped
     network_mode: host
+    depends_on:
+      alertmanager-init:
+        condition: service_completed_successfully
     volumes:
       - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      # Out-of-tree secrets directory. The `smtp_password` file inside
-      # is NOT committed to git (see .gitignore); create it manually
-      # at deploy time with `chmod 600` and the raw SMTP password
-      # on a single line, no trailing newline. Alertmanager reads it
-      # via `smtp_auth_password_file` in alertmanager.yml.
-      - ./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro
+      # Secrets landed by alertmanager-init at container start.
+      # Alertmanager reads `smtp_password` (and any future secrets)
+      # via `smtp_auth_password_file` fields in alertmanager.yml.
+      - alertmanager_secrets:/etc/alertmanager/secrets:ro
       - alertmanager_data:/alertmanager
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
@@ -392,3 +429,4 @@ volumes:
   prometheus_data:
   grafana_data:
   alertmanager_data:
+  alertmanager_secrets:
