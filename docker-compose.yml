@@ -254,18 +254,53 @@ services:
   # .env (or defaults to 'admin' — CHANGE ON FIRST DEPLOY).
   # ----------------------------------------------------------------
 
+  # ----------------------------------------------------------------
+  # One-shot init that stages Prometheus's config into a named volume
+  # with 0644 perms and UID 65534 ownership. This defends against a
+  # umask=077 host: `git pull` would otherwise recreate the checked-out
+  # files as 0600, locking out Prometheus's `nobody` container UID and
+  # putting the container in a crash-loop.
+  #
+  # Idempotent — re-runs on every `docker compose up` (or explicit
+  # `up -d prometheus-init`) and rewrites the target files.
+  # ----------------------------------------------------------------
+  prometheus-init:
+    image: busybox:1.36
+    container_name: ussd-prometheus-init
+    restart: "no"
+    volumes:
+      - ./monitoring/prometheus.yml:/src/prometheus.yml:ro
+      - ./monitoring/prometheus/rules.d:/src/rules.d:ro
+      - prometheus_conf:/dst
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        mkdir -p /dst/rules.d
+        cp /src/prometheus.yml /dst/prometheus.yml
+        # Some deploys legitimately have zero rule files — the `|| true`
+        # keeps init idempotent in that edge case.
+        find /src/rules.d -maxdepth 1 -name '*.yml' -exec cp {} /dst/rules.d/ \; || true
+        # Own by 65534 (`nobody`) — the UID prometheus runs as inside
+        # its container. Mode 644 so the container can read even if
+        # some other tool touches these files with a stricter umask.
+        chown -R 65534:65534 /dst
+        find /dst -type f -exec chmod 644 {} \;
+        echo "prometheus config staged ($$(find /dst -type f | wc -l) files)"
+
   prometheus:
     image: prom/prometheus:v2.55.1
     container_name: ussd-prometheus
     restart: unless-stopped
     network_mode: host
+    depends_on:
+      prometheus-init:
+        condition: service_completed_successfully
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      # Alerting rules — Prometheus loads every *.yml file it finds
-      # here (glob'd in prometheus.yml's `rule_files:` section). Add
-      # a file to monitoring/prometheus/rules.d/ + `docker compose
-      # restart prometheus` to activate new alerts.
-      - ./monitoring/prometheus/rules.d:/etc/prometheus/rules.d:ro
+      # Named volume populated by prometheus-init — see block above.
+      # Prometheus reads from here, not from the host bind mount.
+      - prometheus_conf:/etc/prometheus:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -427,6 +462,7 @@ services:
 volumes:
   ussd_exports:
   prometheus_data:
+  prometheus_conf:
   grafana_data:
   alertmanager_data:
   alertmanager_secrets:
