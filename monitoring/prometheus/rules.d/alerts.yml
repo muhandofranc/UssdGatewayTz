@@ -1,0 +1,181 @@
+# Prometheus alert rules for UssdGatewayTz.
+#
+# Rules are grouped by concern; each rule carries:
+#   * `severity` label — page | warn | info (Alertmanager routes on this).
+#   * `summary`  — one-line description for pager UI.
+#   * `runbook`  — pointer to what to do about it.
+#
+# Add new rules under the appropriate group; group `interval` is how
+# often the expression is re-evaluated (Prometheus default is 15s).
+
+groups:
+
+  # -------- USSD gateway application ------------------------------
+  - name: ussd-gateway-app
+    interval: 30s
+    rules:
+
+      - alert: UssdHopLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, operator) (rate(ussd_hop_latency_seconds_bucket[5m]))
+          ) > 2
+        for: 3m
+        labels: { severity: page }
+        annotations:
+          summary:  "USSD p95 hop latency > 2s for {{ $labels.operator }}"
+          runbook:  "Check the specific MNO's upstream handler latency. If ALL MNOs, look at PG / gateway load. See doc §15.2."
+
+      - alert: UssdHandlerErrorRateHigh
+        expr: |
+          sum by (operator, error_class) (rate(ussd_handler_errors_total[5m]))
+          /
+          clamp_min(sum by (operator) (rate(ussd_hop_total[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary:  "USSD {{ $labels.operator }}: {{ $labels.error_class }} > 5% of hops"
+          runbook:  "Check the handler URL for that MNO's shortcode. class=timeout → slow upstream; class=non2xx → handler bug; class=transport → connection reset / DNS."
+
+      - alert: UssdLogWriterQueueGrowing
+        expr: ussd_session_log_queue_depth > 5000
+        for: 1m
+        labels: { severity: warn }
+        annotations:
+          summary:  "Session-log writer queue > 5000 rows"
+          runbook:  "Postgres write path is slow. Check pg_stat_activity for long INSERTs. If it stays >5k for 5m, capacity conversation."
+
+      - alert: UssdLogWriterDroppingRows
+        expr: rate(ussd_session_log_rows_dropped_total[2m]) > 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary:  "Session-log writer is DROPPING rows"
+          runbook:  "Queue full. Postgres wedged? Check writer_batch_flush_failures_total and Postgres availability."
+
+      - alert: UssdGatewayScrapeDown
+        expr: up{job="ussd-gateway"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary:  "Prometheus can't scrape the gateway /metrics"
+          runbook:  "Gateway may be down, or firewall between hosts blocking 172.16.0.162:8280 from the dashboard host."
+
+
+  # -------- Host — CPU / RAM / disk -------------------------------
+  - name: host-resources
+    interval: 30s
+    rules:
+
+      - alert: HostDown
+        expr: up{job="node-exporter"} == 0
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary:  "Host {{ $labels.host }} scrape failing (node-exporter DOWN)"
+          runbook:  "Either the box is off, node-exporter crashed, or firewall dropped :9100."
+
+      - alert: HostCPUHigh
+        expr: |
+          100 - (avg by (host) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary:  "Host {{ $labels.host }} CPU > 90% for 5m"
+          runbook:  "Check which process is spinning. If gateway host, look at uvicorn workers + php-fpm."
+
+      - alert: HostMemoryHigh
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary:  "Host {{ $labels.host }} RAM > 90% for 5m"
+          runbook:  "Grafana per-container memory table pinpoints the greedy container. OOM-kill is next if this keeps climbing."
+
+      - alert: HostDiskFillingUp
+        expr: |
+          100 - (
+            node_filesystem_avail_bytes{
+              fstype!~"tmpfs|overlay|squashfs|nsfs|autofs|devpts|devtmpfs|proc|sysfs|cgroup2?|configfs|debugfs|fusectl|bpf|hugetlbfs|mqueue|pstore|rpc_pipefs|tracefs|selinuxfs|securityfs|binfmt_misc|iso9660",
+              mountpoint!~"/(dev|sys|proc|run|boot|etc|var/lib/docker/.+)($|/.*)"
+            }
+            /
+            node_filesystem_size_bytes{
+              fstype!~"tmpfs|overlay|squashfs|nsfs|autofs|devpts|devtmpfs|proc|sysfs|cgroup2?|configfs|debugfs|fusectl|bpf|hugetlbfs|mqueue|pstore|rpc_pipefs|tracefs|selinuxfs|securityfs|binfmt_misc|iso9660",
+              mountpoint!~"/(dev|sys|proc|run|boot|etc|var/lib/docker/.+)($|/.*)"
+            }
+          ) * 100 > 85
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary:  "Host {{ $labels.host }} filesystem {{ $labels.mountpoint }} > 85% full"
+          runbook:  "Sweep logs / docker images / old exports. If gateway host, check /exports volume and the exports-worker retention config."
+
+      - alert: HostDiskCritical
+        expr: |
+          100 - (
+            node_filesystem_avail_bytes{
+              fstype!~"tmpfs|overlay|squashfs|nsfs|autofs|devpts|devtmpfs|proc|sysfs|cgroup2?|configfs|debugfs|fusectl|bpf|hugetlbfs|mqueue|pstore|rpc_pipefs|tracefs|selinuxfs|securityfs|binfmt_misc|iso9660",
+              mountpoint!~"/(dev|sys|proc|run|boot|etc|var/lib/docker/.+)($|/.*)"
+            }
+            /
+            node_filesystem_size_bytes{
+              fstype!~"tmpfs|overlay|squashfs|nsfs|autofs|devpts|devtmpfs|proc|sysfs|cgroup2?|configfs|debugfs|fusectl|bpf|hugetlbfs|mqueue|pstore|rpc_pipefs|tracefs|selinuxfs|securityfs|binfmt_misc|iso9660",
+              mountpoint!~"/(dev|sys|proc|run|boot|etc|var/lib/docker/.+)($|/.*)"
+            }
+          ) * 100 > 95
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary:  "Host {{ $labels.host }} filesystem {{ $labels.mountpoint }} > 95% full"
+          runbook:  "Postgres, docker layer store, and app logs all start failing at 100%. Free space NOW."
+
+
+  # -------- Containers (via cAdvisor) -----------------------------
+  - name: containers
+    interval: 30s
+    rules:
+
+      - alert: ContainerDown
+        expr: |
+          (time() - container_last_seen{name!=""}) > 60
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary:  "Container {{ $labels.name }} on {{ $labels.host }} looks dead"
+          runbook:  "cAdvisor hasn't seen it for 60+ seconds. `docker ps -a` on the host, then `docker logs` to find the reason."
+
+      - alert: ContainerOOMKilled
+        expr: |
+          increase(container_oom_events_total{name!=""}[5m]) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary:  "Container {{ $labels.name }} on {{ $labels.host }} was OOM-killed"
+          runbook:  "Kernel killed it for memory pressure. Bump memory limit or investigate the leak."
+
+      - alert: ContainerRestartingFlappy
+        expr: |
+          changes(container_start_time_seconds{name!=""}[10m]) > 3
+        for: 1m
+        labels: { severity: warn }
+        annotations:
+          summary:  "Container {{ $labels.name }} on {{ $labels.host }} restarted > 3× in 10 min"
+          runbook:  "Something's crash-looping. `docker logs --tail=100` on the affected host + container name."
+
+
+  # -------- Prometheus itself ------------------------------------
+  - name: monitoring
+    interval: 30s
+    rules:
+
+      - alert: PrometheusScrapeTargetDown
+        expr: up == 0
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary:  "Scrape target {{ $labels.job }} on {{ $labels.instance }} DOWN"
+          runbook:  "Prometheus can't reach this endpoint. If it's ussd-gateway or node-exporter, page. If it's cadvisor and everything else is up, investigate but non-urgent."

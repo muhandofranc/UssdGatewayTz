@@ -24,3 +24,11 @@ docker-compose.yml
 node_modules/
 .next/
 dashboard/tsconfig.tsbuildinfo
+
+# Alertmanager runtime secrets — NEVER commit. Contains SMTP
+# password + any future integration keys (Slack webhook, PagerDuty
+# token, etc.). Files live inside the ignored directory; the
+# directory itself is kept via .keep only for the docker mount.
+monitoring/alertmanager/secrets/*
+!monitoring/alertmanager/secrets/.keep
+!monitoring/alertmanager/secrets/README.md

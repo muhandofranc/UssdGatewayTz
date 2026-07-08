@@ -1,0 +1,302 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "iteration": 1,
+  "links": [
+    {
+      "title": "USSD Gateway — fleet overview",
+      "type": "link",
+      "icon": "dashboard",
+      "url": "/d/ussd-gateway-overview/ussd-gateway-overview"
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Host — $host",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "CPU %",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red",    "value": 90 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "100 - (avg (rate(node_cpu_seconds_total{host=\"$host\", mode=\"idle\"}[1m])) * 100)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "RAM %",
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red",    "value": 90 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "(1 - (node_memory_MemAvailable_bytes{host=\"$host\"} / node_memory_MemTotal_bytes{host=\"$host\"})) * 100",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Load (1 min)",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        { "expr": "node_load1{host=\"$host\"}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Containers running",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "expr": "count(container_last_seen{host=\"$host\", name!=\"\"} > (time() - 60))",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU %",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 7 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } },
+      "targets": [
+        {
+          "expr": "100 - (avg by (mode) (rate(node_cpu_seconds_total{host=\"$host\", mode!=\"idle\"}[1m])) * 0 + 100 - avg (rate(node_cpu_seconds_total{host=\"$host\", mode=\"idle\"}[1m])) * 100)",
+          "legendFormat": "used",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "RAM (used / total, bytes)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 7 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        { "expr": "node_memory_MemTotal_bytes{host=\"$host\"} - node_memory_MemAvailable_bytes{host=\"$host\"}", "legendFormat": "used", "refId": "A" },
+        { "expr": "node_memory_MemTotal_bytes{host=\"$host\"}", "legendFormat": "total", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Disk usage % — real filesystems",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } },
+      "targets": [
+        {
+          "expr": "100 - (node_filesystem_avail_bytes{host=\"$host\", fstype!~\"tmpfs|overlay|squashfs|nsfs|autofs|devpts|devtmpfs|proc|sysfs|cgroup2?|configfs|debugfs|fusectl|bpf|hugetlbfs|mqueue|pstore|rpc_pipefs|tracefs|selinuxfs|securityfs|binfmt_misc|iso9660\",mountpoint!~\"/(dev|sys|proc|run|boot|etc|var/lib/docker/.+)($|/.*)\"} / node_filesystem_size_bytes{host=\"$host\", fstype!~\"tmpfs|overlay|squashfs|nsfs|autofs|devpts|devtmpfs|proc|sysfs|cgroup2?|configfs|debugfs|fusectl|bpf|hugetlbfs|mqueue|pstore|rpc_pipefs|tracefs|selinuxfs|securityfs|binfmt_misc|iso9660\",mountpoint!~\"/(dev|sys|proc|run|boot|etc|var/lib/docker/.+)($|/.*)\"}) * 100",
+          "legendFormat": "{{mountpoint}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Network I/O (bytes / s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "Bps" } },
+      "targets": [
+        { "expr": "sum by (device) (rate(node_network_receive_bytes_total{host=\"$host\", device!~\"lo|docker.*|br-.*|veth.*\"}[1m]))",  "legendFormat": "rx {{device}}", "refId": "A" },
+        { "expr": "sum by (device) (rate(node_network_transmit_bytes_total{host=\"$host\", device!~\"lo|docker.*|br-.*|veth.*\"}[1m]))", "legendFormat": "tx {{device}}", "refId": "B" }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Containers on $host",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 }
+    },
+    {
+      "type": "table",
+      "title": "Container health — last seen",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 24 },
+      "datasource": "Prometheus",
+      "description": "Seconds since cAdvisor last saw the container. Green = healthy, yellow ≥ 30 s = flagging, red ≥ 60 s = probably dead (or cAdvisor lost sight of it).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "yellow", "value": 30 },
+              { "color": "red",    "value": 60 }
+            ]
+          },
+          "custom": { "cellOptions": { "type": "color-background" }, "align": "left" }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "name" },  "properties": [ { "id": "custom.cellOptions", "value": { "type": "auto" } }, { "id": "custom.width", "value": 320 } ] },
+          { "matcher": { "id": "byName", "options": "image" }, "properties": [ { "id": "custom.cellOptions", "value": { "type": "auto" } }, { "id": "custom.width", "value": 320 } ] }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": { "mode": "columns", "keepLabels": ["name", "image"] }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true, "job": true, "instance": true, "service": true,
+              "id": true, "__name__": true
+            },
+            "renameByName": { "Value": "seconds since last seen" },
+            "indexByName":  { "name": 0, "image": 1, "Value": 2 }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "expr": "time() - container_last_seen{host=\"$host\", name!=\"\"}",
+          "legendFormat": "{{name}}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container CPU %",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "percent" } },
+      "targets": [
+        {
+          "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{host=\"$host\", name!=\"\"}[1m])) * 100",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container memory (RSS)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        {
+          "expr": "container_memory_rss{host=\"$host\", name!=\"\"}",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container restart rate",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
+      "datasource": "Prometheus",
+      "description": "Non-zero blips = something crashed or was manually bounced (derived from cAdvisor's `container_start_time_seconds`).",
+      "fieldConfig": { "defaults": { "unit": "cps" } },
+      "targets": [
+        {
+          "expr": "sum by (name) (rate(container_start_time_seconds{host=\"$host\", name!=\"\"}[5m]))",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container OOM events",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
+      "datasource": "Prometheus",
+      "description": "Kernel out-of-memory kills. Any non-zero value means the container's PID was killed for memory pressure.",
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "targets": [
+        {
+          "expr": "sum by (name) (rate(container_oom_events_total{host=\"$host\", name!=\"\"}[5m]))",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["ussd", "per-host"],
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": { "query": "label_values(node_cpu_seconds_total, host)", "refId": "host" },
+        "refresh": 1,
+        "sort": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": { "text": "172.16.0.104", "value": "172.16.0.104" },
+        "description": "Pick which host to drill into. Populated live from node-exporter scrapes; a host missing here means its node-exporter is DOWN."
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "USSD Gateway — per-host details",
+  "uid": "ussd-gateway-per-host",
+  "version": 1,
+  "weekStart": ""
+}

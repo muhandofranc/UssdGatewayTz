@@ -27,6 +27,18 @@ global:
     env: production
     stack: ussd-gateway-tz
 
+# Alerting rules — loaded from monitoring/prometheus/rules.d/ (mounted
+# into the container at /etc/prometheus/rules.d/ by docker-compose).
+rule_files:
+  - "/etc/prometheus/rules.d/*.yml"
+
+# Send fired alerts to Alertmanager. The Alertmanager container runs
+# alongside Prometheus on the dashboard host at localhost:9093.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["localhost:9093"]
+
 scrape_configs:
 
   # ----- Prometheus self-scrape (still one instance, on dashboard host) -

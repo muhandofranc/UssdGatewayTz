@@ -261,6 +261,11 @@ services:
     network_mode: host
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Alerting rules — Prometheus loads every *.yml file it finds
+      # here (glob'd in prometheus.yml's `rule_files:` section). Add
+      # a file to monitoring/prometheus/rules.d/ + `docker compose
+      # restart prometheus` to activate new alerts.
+      - ./monitoring/prometheus/rules.d:/etc/prometheus/rules.d:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -273,6 +278,39 @@ services:
       # anything on 9090; adjust to 9090 if you have nothing else
       # using it.
       - "--web.listen-address=0.0.0.0:9091"
+      # Enable POST /-/reload so ops can hot-reload rule files
+      # without restarting the container:
+      #   curl -X POST http://localhost:9091/-/reload
+      - "--web.enable-lifecycle"
+
+  # ----------------------------------------------------------------
+  # Alertmanager — receives alerts from Prometheus, de-duplicates
+  # them into human-friendly notifications and routes to the
+  # configured receiver (email / Slack / PagerDuty / …).
+  #
+  # Ships with a stub `default` receiver that logs to its own log
+  # only — fill in monitoring/alertmanager/alertmanager.yml with a
+  # real destination and `docker compose restart alertmanager`.
+  # See the comments at the top of that file for the common shapes.
+  # ----------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: ussd-alertmanager
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Out-of-tree secrets directory. The `smtp_password` file inside
+      # is NOT committed to git (see .gitignore); create it manually
+      # at deploy time with `chmod 600` and the raw SMTP password
+      # on a single line, no trailing newline. Alertmanager reads it
+      # via `smtp_auth_password_file` in alertmanager.yml.
+      - ./monitoring/alertmanager/secrets:/etc/alertmanager/secrets:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--web.listen-address=0.0.0.0:9093"
 
   node-exporter:
     image: prom/node-exporter:v1.8.2
@@ -353,3 +391,4 @@ volumes:
   ussd_exports:
   prometheus_data:
   grafana_data:
+  alertmanager_data:

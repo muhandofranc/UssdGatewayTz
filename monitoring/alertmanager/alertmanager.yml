@@ -1,0 +1,98 @@
+# Alertmanager configuration for UssdGatewayTz.
+#
+# Alerts fired by Prometheus arrive here; Alertmanager de-dupes,
+# groups, silences, and routes to the receivers below.
+#
+# The current shape is CATCH-ALL to the `default` receiver — a stub
+# webhook that just logs to Alertmanager's own log. Nothing is being
+# emailed / slacked / paged yet. That's deliberate — pick your
+# real destination (email, Slack, PagerDuty, Ntfy…) and fill in the
+# receiver block, then `docker compose restart alertmanager`.
+#
+# WHEN YOU CHOOSE A REAL RECEIVER, common shapes:
+#
+# email_configs:
+#   - to: 'oncall@example.com'
+#     from: 'alerts@example.com'
+#     smarthost: 'smtp.gmail.com:587'
+#     auth_username: 'alerts@example.com'
+#     auth_password: 'YOUR_APP_PASSWORD'
+#     require_tls: true
+#
+# slack_configs:
+#   - send_resolved: true
+#     api_url:   'https://hooks.slack.com/services/T00/B00/XXX'
+#     channel:   '#alerts-ussd'
+#     title:     '{{ .CommonAnnotations.summary }}'
+#     text:      '{{ range .Alerts }}{{ .Annotations.runbook }}\n{{ end }}'
+#
+# webhook_configs:
+#   - url: 'https://ntfy.sh/your-channel'  # or PagerDuty, VictorOps, etc.
+
+global:
+  resolve_timeout: 5m
+  # SMTP defaults — every email receiver inherits these unless it
+  # overrides. Password is read from a file that lives OUTSIDE git
+  # (see `secrets/smtp_password` in the compose volume mount and the
+  # top-level `.gitignore` entry).
+  smtp_from:          'systemalerts@onfonmedia.co.tz'
+  smtp_smarthost:     'mail.onfonmedia.co.tz:465'
+  smtp_auth_username: 'systemalerts@onfonmedia.co.tz'
+  smtp_auth_password_file: '/etc/alertmanager/secrets/smtp_password'
+  # Port 465 = SMTPS (implicit TLS from handshake). Alertmanager's
+  # `smtp_require_tls` controls STARTTLS on unencrypted ports (587),
+  # NOT SMTPS — the client speaks TLS from byte one on 465 and
+  # `smtp_require_tls` becomes a no-op. Leave it false to avoid
+  # confusion.
+  smtp_require_tls:   false
+  smtp_hello:         'ussd-alertmanager'   # HELO / EHLO identifier
+
+# Group alerts by (alertname, severity, host) so a single page carries
+# ALL related firing alerts, not one per second.
+route:
+  group_by:  ['alertname', 'severity', 'host']
+  group_wait:      10s
+  group_interval:  30s
+  repeat_interval: 3h
+  receiver: default
+
+  # ---- Severity-based sub-routes (ready to fill in) ------------
+  # routes:
+  #   - matchers: [ severity="page" ]
+  #     receiver: pager        # e.g. PagerDuty webhook
+  #     continue: true         # also send to default
+  #   - matchers: [ severity="warn" ]
+  #     receiver: slack-warn   # e.g. Slack channel
+
+receivers:
+  # ---- Primary receiver — email via Onfon smart-host --------------
+  # Inherits smtp_* from the `global:` block above; only the
+  # recipient list needs to change here.
+  - name: default
+    email_configs:
+      - to: 'support@onfonmedia.co.tz'
+        send_resolved: true
+        # Slightly-nicer HTML body than the default template. Keeps
+        # the raw values so on-call can copy-paste them into curl:
+        headers:
+          Subject: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }} — {{ .CommonLabels.host | default "fleet" }}'
+        html: |
+          {{ range .Alerts }}
+          <p><b>{{ .Annotations.summary }}</b></p>
+          <ul>
+            <li>Severity: {{ .Labels.severity }}</li>
+            <li>Host: {{ .Labels.host }}</li>
+            {{ if .Labels.operator }}<li>MNO: {{ .Labels.operator }}</li>{{ end }}
+            {{ if .Labels.name }}<li>Container: {{ .Labels.name }}</li>{{ end }}
+            <li>Started: {{ .StartsAt.Format "2006-01-02 15:04:05 MST" }}</li>
+          </ul>
+          <p>{{ .Annotations.runbook }}</p>
+          <hr />
+          {{ end }}
+
+inhibit_rules:
+  # If the host itself is DOWN, silence the per-container / per-
+  # workload noise that would follow from the outage.
+  - source_matchers: [ alertname="HostDown" ]
+    target_matchers: [ alertname=~"ContainerDown|UssdGatewayScrapeDown|PrometheusScrapeTargetDown" ]
+    equal: ['host']
