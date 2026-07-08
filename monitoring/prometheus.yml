@@ -120,28 +120,44 @@ scrape_configs:
           service: rabbitmq
           host:    172.16.0.44
 
-  # ----- RabbitMQ per-object detail (per-queue depth, per-exchange
-  #       throughput). Same nodes but the `detailed` endpoint. This
-  #       is heavier — scrape less often and only if the queue count
-  #       is bounded (< a few hundred). Broker versions ≥ 3.10:
-  #         /metrics/detailed
-  #       Older 3.8-3.9:
-  #         /metrics/per-object
-  #       Adjust `metrics_path` if your broker is on 3.9 or below.
-  - job_name: rabbitmq-per-queue
+  # ----- RabbitMQ per-queue detail — NEWER brokers (RabbitMQ ≥ 3.10)
+  # `/metrics/detailed` with `?family=…` scopes the response so the
+  # scrape stays fast. Metrics land natively as `rabbitmq_detailed_*`
+  # which is what the dashboard and alert rules query.
+  - job_name: rabbitmq-per-queue-detailed
     scrape_interval: 30s
     metrics_path: /metrics/detailed
     params:
       family: [queue_coarse_metrics, queue_metrics, queue_consumer_count]
     static_configs:
-      - targets: ["172.16.0.131:15692"]
-        labels:
-          service: rabbitmq
-          host:    172.16.0.131
       - targets: ["172.16.0.44:15692"]
         labels:
           service: rabbitmq
           host:    172.16.0.44
+
+  # ----- RabbitMQ per-queue detail — LEGACY brokers (3.8 / 3.9)
+  # `/metrics/detailed` doesn't exist yet — use the pre-3.10 endpoint
+  # `/metrics/per-object`. Its metrics are prefixed `rabbitmq_queue_*`
+  # (no `_detailed_`). We rewrite them at scrape time so downstream
+  # queries can stay uniform across both versions.
+  #
+  # Upgrade candidate: promote 172.16.0.131's RabbitMQ to ≥ 3.10 to
+  # unify the scrape config. Not urgent — the relabel below covers it.
+  - job_name: rabbitmq-per-queue-legacy
+    scrape_interval: 30s
+    metrics_path: /metrics/per-object
+    static_configs:
+      - targets: ["172.16.0.131:15692"]
+        labels:
+          service: rabbitmq
+          host:    172.16.0.131
+    metric_relabel_configs:
+      # Rename rabbitmq_queue_XXX → rabbitmq_detailed_queue_XXX so
+      # the dashboard/alerts don't need per-host special-cases.
+      - source_labels: [__name__]
+        regex: 'rabbitmq_queue_(.+)'
+        replacement: 'rabbitmq_detailed_queue_${1}'
+        target_label: __name__
 
   # ----- Dashboard (optional) -----------------------------------
   # The Next.js dashboard doesn't ship a /metrics endpoint today.
