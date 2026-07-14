@@ -1,0 +1,242 @@
+{
+  "uid": "ussd-gateway-by-shortcode",
+  "title": "USSD Gateway — by shortcode",
+  "tags": ["ussd", "gateway", "shortcode"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+
+  "templating": {
+    "list": [
+      {
+        "name": "shortcode",
+        "label": "Shortcode",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(ussd_hop_total, shortcode)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      },
+      {
+        "name": "operator",
+        "label": "MNO",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(ussd_hop_total, operator)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "selected": true, "text": ["All"], "value": ["$__all"] }
+      }
+    ]
+  },
+
+  "panels": [
+    { "type": "row", "title": "Traffic", "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
+
+    {
+      "type": "stat",
+      "title": "Shortcodes with traffic (selected)",
+      "description": "Distinct shortcodes emitting hops in the window. If this drops, a partner has gone silent.",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0 } },
+      "targets": [
+        {
+          "expr": "count(count by (shortcode) (rate(ussd_hop_total{shortcode=~\"$shortcode\",operator=~\"$operator\"}[5m]) > 0))",
+          "legendFormat": "shortcodes",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Hops per second — by shortcode",
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 1 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        {
+          "expr": "sum by (shortcode) (rate(ussd_hop_total{shortcode=~\"$shortcode\",operator=~\"$operator\"}[1m]))",
+          "legendFormat": "{{shortcode}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Hops per second — by shortcode + event",
+      "description": "event = the USSD leg (begin / continue / end). A shortcode with begins but no ends is failing mid-session.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 5 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        {
+          "expr": "sum by (shortcode, event) (rate(ussd_hop_total{shortcode=~\"$shortcode\",operator=~\"$operator\"}[1m]))",
+          "legendFormat": "{{shortcode}} / {{event}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    { "type": "row", "title": "Latency", "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 } },
+
+    {
+      "type": "timeseries",
+      "title": "Hop latency p95 — by shortcode",
+      "description": "Handler round-trip. The per-shortcode cap is 5s, so anything approaching that is about to time out.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 11 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 2 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, shortcode) (rate(ussd_hop_latency_seconds_bucket{shortcode=~\"$shortcode\",operator=~\"$operator\"}[5m])))",
+          "legendFormat": "{{shortcode}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Hop latency p99 — by shortcode",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 11 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, shortcode) (rate(ussd_hop_latency_seconds_bucket{shortcode=~\"$shortcode\",operator=~\"$operator\"}[5m])))",
+          "legendFormat": "{{shortcode}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    { "type": "row", "title": "Errors", "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 } },
+
+    {
+      "type": "timeseries",
+      "title": "Handler errors / s — by shortcode + class",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "targets": [
+        {
+          "expr": "sum by (shortcode, error_class) (rate(ussd_handler_errors_total{shortcode=~\"$shortcode\",operator=~\"$operator\"}[1m]))",
+          "legendFormat": "{{shortcode}} / {{error_class}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Error ratio % — by shortcode",
+      "description": "errors / hops. This is the panel that actually catches a broken partner handler: a shortcode with low traffic can be 100% failing and still be invisible on an absolute error-rate graph.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 5 },
+              { "color": "red", "value": 25 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "100 * sum by (shortcode) (rate(ussd_handler_errors_total{shortcode=~\"$shortcode\",operator=~\"$operator\"}[5m])) / sum by (shortcode) (rate(ussd_hop_total{shortcode=~\"$shortcode\",operator=~\"$operator\"}[5m]))",
+          "legendFormat": "{{shortcode}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    { "type": "row", "title": "Leaderboards (last 5m)", "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 } },
+
+    {
+      "type": "table",
+      "title": "Busiest shortcodes",
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 29 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "reqps", "decimals": 3 } },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (shortcode) (rate(ussd_hop_total{shortcode=~\"$shortcode\",operator=~\"$operator\"}[5m])))",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true } } }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Slowest shortcodes (p95)",
+      "gridPos": { "h": 9, "w": 8, "x": 8, "y": 29 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 3 } },
+      "targets": [
+        {
+          "expr": "topk(10, histogram_quantile(0.95, sum by (le, shortcode) (rate(ussd_hop_latency_seconds_bucket{shortcode=~\"$shortcode\",operator=~\"$operator\"}[5m]))))",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true } } }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Most-failing shortcodes (error %)",
+      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 29 },
+      "datasource": "Prometheus",
+      "fieldConfig": { "defaults": { "unit": "percent", "decimals": 2 } },
+      "targets": [
+        {
+          "expr": "topk(10, 100 * sum by (shortcode) (rate(ussd_handler_errors_total{shortcode=~\"$shortcode\",operator=~\"$operator\"}[5m])) / sum by (shortcode) (rate(ussd_hop_total{shortcode=~\"$shortcode\",operator=~\"$operator\"}[5m])))",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true } } }
+      ]
+    }
+  ]
+}

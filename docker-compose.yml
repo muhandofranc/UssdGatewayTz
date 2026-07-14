@@ -436,15 +436,65 @@ services:
     healthcheck:
       disable: true
 
+  # ----------------------------------------------------------------
+  # One-shot init that stages Grafana's dashboards + provisioning
+  # (datasources + dashboard-provider yaml) into named volumes with
+  # 0644 perms and UID 472 ownership.
+  #
+  # Same problem, same shape as prometheus-init: on a host with
+  # umask=077 (or a `sudo`-based git-pull), the checked-out files come
+  # out at 0600 owned by root. Grafana's runtime UID is 472; without
+  # this init it silently skips any file it can't read, and the
+  # dashboard appears "missing" in the UI even though the JSON is
+  # right there on disk.
+  #
+  # Idempotent — re-run any time you edit provisioning/dashboards
+  # files. The `rm -rf` at the top wipes stale artefacts so a removed
+  # dashboard actually disappears from Grafana.
+  # ----------------------------------------------------------------
+  grafana-init:
+    image: busybox:1.36
+    container_name: ussd-grafana-init
+    restart: "no"
+    volumes:
+      - ./monitoring/grafana/dashboards:/src/dashboards:ro
+      - ./monitoring/grafana/provisioning:/src/provisioning:ro
+      - grafana_dashboards:/dst/dashboards
+      - grafana_provisioning:/dst/provisioning
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        # Fresh copy every run — Grafana's file-provider treats what
+        # it finds as authoritative, so we want removals to propagate.
+        rm -rf /dst/dashboards/* /dst/provisioning/*
+        # `cp -a` preserves subdirectory structure so
+        # provisioning/datasources/*.yml + provisioning/dashboards/*.yml
+        # keep the layout Grafana expects.
+        cp -a /src/dashboards/. /dst/dashboards/ 2>/dev/null || true
+        cp -a /src/provisioning/. /dst/provisioning/ 2>/dev/null || true
+        # UID 472 = grafana user inside grafana/grafana image.
+        chown -R 472:472 /dst/dashboards /dst/provisioning
+        find /dst -type f -exec chmod 644 {} \;
+        find /dst -type d -exec chmod 755 {} \;
+        echo "grafana config staged ($$(find /dst -type f | wc -l) files, owned 472:472)"
+
   grafana:
     image: grafana/grafana:11.3.0
     container_name: ussd-grafana
     restart: unless-stopped
     network_mode: host
+    depends_on:
+      grafana-init:
+        condition: service_completed_successfully
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      # Provisioning + dashboards come from named volumes staged by
+      # grafana-init (see block above). Host bind-mount was retired
+      # because it kept surfacing umask=077 perm surprises.
+      - grafana_provisioning:/etc/grafana/provisioning:ro
+      - grafana_dashboards:/var/lib/grafana/dashboards:ro
     environment:
       GF_SECURITY_ADMIN_USER:     ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
@@ -464,5 +514,7 @@ volumes:
   prometheus_data:
   prometheus_conf:
   grafana_data:
+  grafana_dashboards:
+  grafana_provisioning:
   alertmanager_data:
   alertmanager_secrets:
