@@ -265,7 +265,10 @@ async def _handle_ussd(req: Request, operator_key: str) -> Response:
         op_id = _operator_id_or_zero(operator_key)
         log_leg(
             operator_id=op_id, operator_name=operator_key,
-            shortcode_id=None, service_code=ur.service_code,
+            # Attributable when the adapter recovered it from the session
+            # cache (auth-failed on a mid-session leg); None on the
+            # opening leg, where no shortcode has been resolved yet.
+            shortcode_id=ur.shortcode_id, service_code=ur.service_code,
             session_id=ur.session_id, msisdn=ur.msisdn,
             ussd_string=ur.ussd_string,
             direction="inbound",
@@ -287,7 +290,9 @@ async def _handle_ussd(req: Request, operator_key: str) -> Response:
         resp = adapter.render(UnifiedReply(action=Action.CON, message=""))
         log_leg(
             operator_id=op_id, operator_name=operator_key,
-            shortcode_id=None, service_code=ur.service_code,
+            # Attributable when the adapter recovered it from the session
+            # cache; None on a cache miss (session state already gone).
+            shortcode_id=ur.shortcode_id, service_code=ur.service_code,
             session_id=ur.session_id, msisdn=ur.msisdn,
             ussd_string=ur.ussd_string,
             direction="inbound",
@@ -319,7 +324,10 @@ async def _handle_ussd(req: Request, operator_key: str) -> Response:
         resp = adapter.render(reply)
         log_leg(
             operator_id=op_id, operator_name=operator_key,
-            shortcode_id=None,
+            # Attributable when the adapter recovered it from the session
+            # cache; None if session state was already gone (cache miss /
+            # swept / cancel arrived before we ever saw the START leg).
+            shortcode_id=ur.shortcode_id,
             service_code=ur.service_code,
             session_id=ur.session_id, msisdn=ur.msisdn,
             ussd_string=ur.ussd_string,

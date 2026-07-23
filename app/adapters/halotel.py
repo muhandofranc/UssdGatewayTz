@@ -374,6 +374,9 @@ class Halotel:
         msisdn = fields["msisdn"]
         msg    = fields["msg"]
         op_id  = self._resolve_operator_id()
+        # Only set on terminal legs (see below) — the pipeline resolves
+        # the shortcode itself on START/INPUT legs and uses that id.
+        shortcode_id = None
 
         # Build service_code + ussd_string per lifecycle.
         if event is SessionEvent.START:
@@ -428,6 +431,10 @@ class Halotel:
                 # number rather than an empty string.
                 if not msisdn:
                     msisdn = prior.msisdn
+                # Carry the cached id so an auth-failed short-circuit on
+                # this leg (checked before the pipeline resolves the
+                # shortcode) still logs an attributable row.
+                shortcode_id = prior.shortcode_id
                 db.upsert_active_session(
                     session_id=transactionid, operator_id=op_id,
                     service_code=service_code,
@@ -444,6 +451,10 @@ class Halotel:
             ussd_string  = prior.ussd_string  if prior else ""
             if prior is not None and not msisdn:
                 msisdn = prior.msisdn
+            # Carry the cached shortcode id so the terminal log row is
+            # attributable — the pipeline short-circuits terminal events
+            # before it would otherwise resolve the shortcode.
+            shortcode_id = prior.shortcode_id if prior else None
 
         return UnifiedRequest(
             operator=self.operator,
@@ -453,6 +464,7 @@ class Halotel:
             ussd_string=ussd_string,
             event=event,
             raw_payload=raw_for_log,
+            shortcode_id=shortcode_id,
         )
 
     def render(self, reply: UnifiedReply) -> Response:

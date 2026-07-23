@@ -83,6 +83,14 @@ class UnifiedRequest:
     ussd_string: str       # accumulated menu trail (gateway appends every user input separated by '*')
     event: SessionEvent    # canonical lifecycle event for this leg
     raw_payload: dict      # the original MNO payload (debug + handler access)
+    # Shortcode id lifted from the session-cache row, when known. Set on
+    # legs the adapter reads from prior session state but that the
+    # pipeline short-circuits BEFORE resolve_shortcode() — terminal
+    # events (cancel/timeout/charge-fail), delivery-ack, and auth-failed
+    # — so those log rows stay attributable to their shortcode. None on
+    # the opening leg (nothing resolved yet) and on legs where the
+    # pipeline resolves the shortcode fresh (it uses that id there).
+    shortcode_id: Optional[int] = None
     # Phase 2 may add: gateway_session_id (our own UUID for the leg),
     # cell_id, network_type. Adapters can stuff these into raw_payload
     # for now.

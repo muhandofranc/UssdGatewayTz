@@ -32,12 +32,22 @@ CREATE TABLE IF NOT EXISTS operators (
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
-INSERT INTO operators (name, display_name) VALUES
+-- Sequence-safe idempotent seed. NOTE: `INSERT ... VALUES ... ON
+-- CONFLICT DO NOTHING` still evaluates the SMALLSERIAL DEFAULT
+-- (nextval) for every candidate row BEFORE detecting the conflict, so
+-- re-running it each boot burns id-sequence values even when nothing is
+-- inserted — which eventually exhausts SMALLINT (32767). The SELECT ...
+-- WHERE NOT EXISTS form only produces rows that are genuinely new, so
+-- nextval fires only for real inserts and never on a no-op re-run.
+INSERT INTO operators (name, display_name)
+SELECT v.name, v.display_name
+FROM (VALUES
     ('vodacom', 'Vodacom Tanzania'),
     ('airtel',  'Airtel Tanzania'),
     ('tigo',    'Tigo (Yas) Tanzania'),
     ('halotel', 'Halotel Tanzania')
-ON CONFLICT (name) DO NOTHING;
+) AS v(name, display_name)
+WHERE NOT EXISTS (SELECT 1 FROM operators o WHERE o.name = v.name);
 
 -- ---------- portal_users + RBAC -------------------------------------
 -- Same shape as the jubileeTzUssd dashboard so the auth/CSRF/rate-
@@ -49,10 +59,14 @@ CREATE TABLE IF NOT EXISTS roles (
     label   VARCHAR(80) NOT NULL
 );
 
-INSERT INTO roles (key, label) VALUES
+-- Sequence-safe idempotent seed (see the operators note above).
+INSERT INTO roles (key, label)
+SELECT v.key, v.label
+FROM (VALUES
     ('super_admin', 'Super Admin'),
     ('client',      'Shortcode Owner / Client')
-ON CONFLICT (key) DO NOTHING;
+) AS v(key, label)
+WHERE NOT EXISTS (SELECT 1 FROM roles r WHERE r.key = v.key);
 
 CREATE TABLE IF NOT EXISTS permissions (
     id      SMALLSERIAL PRIMARY KEY,
@@ -65,12 +79,16 @@ CREATE TABLE IF NOT EXISTS permissions (
 --   reports.view_all     — see every shortcode's sessions (super admin)
 --   shortcodes.manage    — create/edit shortcodes (super admin)
 --   portal_users.manage  — create/edit dashboard users (super admin)
-INSERT INTO permissions (key, label) VALUES
+-- Sequence-safe idempotent seed (see the operators note above).
+INSERT INTO permissions (key, label)
+SELECT v.key, v.label
+FROM (VALUES
     ('reports.view_own',    'View own shortcodes report'),
     ('reports.view_all',    'View ALL shortcodes report'),
     ('shortcodes.manage',   'Manage shortcodes (CRUD)'),
     ('portal_users.manage', 'Manage dashboard users (CRUD)')
-ON CONFLICT (key) DO NOTHING;
+) AS v(key, label)
+WHERE NOT EXISTS (SELECT 1 FROM permissions p WHERE p.key = v.key);
 
 CREATE TABLE IF NOT EXISTS role_permissions (
     role_id        SMALLINT NOT NULL REFERENCES roles(id)       ON DELETE CASCADE,

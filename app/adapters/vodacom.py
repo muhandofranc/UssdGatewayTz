@@ -162,6 +162,9 @@ class Vodacom:
 
         msisdn = normalise_msisdn(msisdn_raw)
         op_id  = self._resolve_operator_id()
+        # Only set on terminal legs (see below) — the pipeline resolves
+        # the shortcode itself on START/INPUT legs and uses that id.
+        shortcode_id = None
 
         if event is SessionEvent.START:
             # First leg: msg IS the dialed service code. Open a
@@ -217,6 +220,10 @@ class Vodacom:
             prior = db.get_active_session(sessionid, op_id)
             service_code = (prior.service_code if prior else "")
             ussd_string  = (prior.ussd_string  if prior else (msg or ""))
+            # Carry the cached shortcode id so the terminal log row is
+            # attributable — the pipeline short-circuits terminal events
+            # before it would otherwise resolve the shortcode.
+            shortcode_id = prior.shortcode_id if prior else None
 
         return UnifiedRequest(
             operator=self.operator,
@@ -226,6 +233,7 @@ class Vodacom:
             ussd_string=ussd_string,
             event=event,
             raw_payload=raw,
+            shortcode_id=shortcode_id,
         )
 
     def render(self, reply: UnifiedReply) -> Response:
