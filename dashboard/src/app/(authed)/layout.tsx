@@ -33,6 +33,7 @@ export default async function AuthedLayout({
     { href: "/reports",     label: "Session Hops",        matchPrefix: "/reports"     },  // per-HTTP-leg detail
     { href: "/exports",     label: "Download Exports",     matchPrefix: "/exports"     },  // queued CSV jobs
     { href: "/integration", label: "Integration Document", matchPrefix: "/integration" },  // handler-URL contract docs
+    { href: "/simulator",   label: "Handler Simulator",    matchPrefix: "/simulator"   },  // test your handler URL live
   ];
   // Shortcodes/Operators sidebar: show for super_admin (manage) AND
   // auditor (view-only). Client/Admin sees their slim "My shortcodes"

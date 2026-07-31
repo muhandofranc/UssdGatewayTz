@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UssdGatewayTz — Partner Integration Guide</title>
+<style>
+  @page {
+    size: A4;
+    margin: 18mm 16mm 20mm 16mm;
+    @bottom-center {
+      content: "UssdGatewayTz — Partner Integration Guide · page " counter(page) " of " counter(pages);
+      font: 10px/1 "Helvetica Neue", Arial, sans-serif;
+      color: #6b7280;
+    }
+  }
+  :root {
+    --red:    #E91E63;
+    --orange: #F7941D;
+    --yellow: #FBC02D;
+    --green:  #43A047;
+    --cyan:   #00ACC1;
+    --blue:   #1E88E5;
+    --violet: #8E24AA;
+    --ink:    #1F1F1F;
+    --slate-900: #0f172a;
+    --slate-700: #334155;
+    --slate-600: #475569;
+    --slate-400: #94a3b8;
+    --slate-200: #e2e8f0;
+    --slate-100: #f1f5f9;
+    --slate-50:  #f8fafc;
+    --brand: linear-gradient(90deg,
+      var(--red) 0%, var(--orange) 18%, var(--yellow) 36%,
+      var(--green) 54%, var(--cyan) 70%, var(--blue) 85%,
+      var(--violet) 100%);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    font-size: 11px;
+    line-height: 1.55;
+  }
+  h1, h2, h3, h4 { color: var(--slate-900); margin: 1.3em 0 0.4em; }
+  h1 { font-size: 26px; }
+  h2 { font-size: 18px; padding-bottom: 4px; border-bottom: 2px solid var(--slate-200); }
+  h3 { font-size: 14px; color: var(--red); }
+  h4 { font-size: 12px; color: var(--slate-700); }
+  p  { margin: 0.4em 0 0.7em; }
+  code, kbd {
+    font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+    font-size: 10px;
+    background: var(--slate-100);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--slate-700);
+  }
+  ul, ol { margin: 0.3em 0 0.8em 1.4em; padding: 0; }
+  li { margin: 2px 0; }
+  a { color: var(--blue); text-decoration: none; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5em 0 0.9em;
+    page-break-inside: avoid;
+  }
+  thead { background: var(--slate-900); color: var(--slate-200); }
+  th, td {
+    text-align: left;
+    padding: 6px 8px;
+    border: 1px solid var(--slate-200);
+    vertical-align: top;
+  }
+  th { font-weight: 600; font-size: 10px; letter-spacing: 0.02em; text-transform: uppercase; }
+  tbody tr:nth-child(even) { background: var(--slate-50); }
+  .brand-strip { height: 4px; background: var(--brand); border-radius: 2px; }
+  .cover {
+    page-break-after: always;
+    text-align: center;
+    padding-top: 28mm;
+  }
+  .cover .logo {
+    width: 90px; height: 90px;
+    margin: 0 auto 18px;
+    display: block;
+  }
+  .cover h1 {
+    font-size: 36px;
+    margin: 6px 0 4px;
+    background: var(--brand);
+    -webkit-background-clip: text;
+            background-clip: text;
+    color: transparent;
+    font-weight: 700;
+  }
+  .cover .subtitle {
+    font-size: 13px;
+    color: var(--slate-600);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .cover .meta {
+    margin-top: 28mm;
+    font-size: 11px;
+    color: var(--slate-700);
+  }
+  .cover .meta div { margin: 4px 0; }
+  .cover .classification {
+    margin-top: 16mm;
+    font-size: 10px;
+    color: var(--red);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .callout {
+    background: var(--slate-50);
+    border-left: 3px solid var(--red);
+    padding: 8px 12px;
+    margin: 0.6em 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .callout.tip { border-left-color: var(--green); }
+  .callout.warn { border-left-color: var(--orange); }
+  .callout strong { color: var(--slate-900); }
+  .pill {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-right: 4px;
+    color: white;
+  }
+  .pill.con { background: var(--green); }
+  .pill.end { background: var(--red); }
+  .pill.vodacom { background: var(--red); }
+  .pill.airtel  { background: var(--orange); }
+  .pill.tigo    { background: var(--blue); }
+  .pill.halotel { background: var(--violet); }
+  .pagebreak { page-break-before: always; }
+  .toc ol { margin-left: 0; padding-left: 1.2em; }
+  .toc li { padding: 3px 0; border-bottom: 1px dotted var(--slate-200); }
+  .toc li a { color: var(--slate-700); }
+  .toc li a strong { color: var(--slate-900); }
+  .small { font-size: 10px; color: var(--slate-600); }
+  figure {
+    margin: 0.8em 0;
+    border: 1px solid var(--slate-200);
+    border-radius: 6px;
+    overflow: hidden;
+    page-break-inside: avoid;
+  }
+  figure figcaption {
+    background: var(--slate-100);
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--slate-600);
+    border-bottom: 1px solid var(--slate-200);
+  }
+  figure pre {
+    margin: 0;
+    padding: 8px 12px;
+    font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
+    font-size: 10px;
+    line-height: 1.45;
+    background: white;
+    white-space: pre;
+    overflow-x: auto;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================== COVER ============================== -->
+<section class="cover">
+  <div class="brand-strip" style="width:60%; margin:0 auto 28px;"></div>
+  <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+    <rect width="64" height="64" rx="10" fill="#ffffff"/>
+    <ellipse cx="32" cy="32" rx="22" ry="28" fill="none" stroke="#111111" stroke-width="3"/>
+    <ellipse cx="32" cy="32" rx="17" ry="22.5" fill="none" stroke="#E62524" stroke-width="6"/>
+    <ellipse cx="32" cy="32" rx="11" ry="15" fill="none" stroke="#111111" stroke-width="1.5"/>
+    <ellipse cx="32" cy="32" rx="6" ry="9" fill="#E62524"/>
+  </svg>
+  <h1>UssdGatewayTz</h1>
+  <div class="subtitle">Partner Integration Guide</div>
+
+  <div class="meta">
+    <div><strong>Version:</strong> 1.0</div>
+    <div><strong>Audience:</strong> External partners hosting a USSD handler URL</div>
+    <div><strong>Owner:</strong> UssdGatewayTz operations team</div>
+  </div>
+
+  <div class="classification">Classified as Confidential — Business Partner</div>
+</section>
+
+<!-- ============================== TOC ============================== -->
+<section class="toc">
+  <h2>Contents</h2>
+  <ol>
+    <li><a href="#arch"><strong>Architecture</strong> — the request/response loop in one diagram</a></li>
+    <li><a href="#onboard"><strong>Onboarding checklist</strong> — what you give us to go live</a></li>
+    <li><a href="#request"><strong>Request shape</strong> — the unified JSON we POST to you</a></li>
+    <li><a href="#reply"><strong>Reply shape</strong> — CON / END, JSON or plain text</a></li>
+    <li><a href="#lifecycle"><strong>Lifecycle</strong> — which events you will and won't see</a></li>
+    <li><a href="#auth"><strong>Authentication</strong> — none vs bearer</a></li>
+    <li><a href="#timeouts"><strong>Timeouts, retries, error handling</strong></a></li>
+    <li><a href="#mno"><strong>Per-MNO quirks</strong> — Vodacom, Airtel, Tigo, Halotel</a></li>
+    <li><a href="#reference"><strong>Reference handlers</strong> — Flask &amp; Express</a></li>
+    <li><a href="#testing"><strong>Testing</strong> — curl the gateway contract</a></li>
+    <li><a href="#reports"><strong>Reports &amp; reconciliation</strong></a></li>
+    <li><a href="#faq"><strong>FAQ</strong></a></li>
+    <li><a href="#contacts"><strong>Operational contacts</strong></a></li>
+  </ol>
+</section>
+
+<!-- ============================== INTRO ============================== -->
+<section class="pagebreak">
+<p>
+This document is for external partners hosting a handler that UssdGatewayTz forwards live USSD traffic to. After onboarding, the gateway accepts USSD requests from the Tanzanian MNOs (Vodacom, Airtel, Tigo&nbsp;/&nbsp;Yas, Halotel), normalises them into a unified JSON shape, and POSTs them to your handler URL. Your handler replies with the menu/result and the gateway returns that to the MNO.
+</p>
+
+<!-- ============================== 1 ============================== -->
+<h2 id="arch">1. Architecture, in one diagram</h2>
+<figure>
+  <figcaption>End-to-end USSD leg flow</figcaption>
+  <pre>  ┌──────────────┐         ┌────────────────────────┐         ┌─────────────────┐
+  │  TZ MNO USSD │   1     │     UssdGatewayTz      │    2    │  YOUR HANDLER   │
+  │  aggregator  │ ──────▶ │  (we own this)         │ ──────▶ │  (you own this) │
+  │              │ ◀────── │                        │ ◀────── │                 │
+  └──────────────┘   4     └────────────────────────┘    3    └─────────────────┘
+       MNO-native           Unified JSON over HTTP             JSON or plain
+       (XML/SOAP/GET)       POST /handler-url-you-give-us      "CON ..."/"END ..."</pre>
+</figure>
+<ol>
+  <li>MNO pushes a USSD leg (every screen the user sees = one leg).</li>
+  <li>Gateway parses the MNO-native shape, applies routing, <strong>POSTs unified JSON to your handler</strong>.</li>
+  <li>Your handler replies — either <code>{ "action": "CON|END", "message": "..." }</code> or plain text starting with <code>CON&nbsp;</code>&nbsp;/&nbsp;<code>END&nbsp;</code>.</li>
+  <li>Gateway translates your reply back to the MNO's native protocol.</li>
+</ol>
+<p>Each USSD session typically consists of 2–6 legs (dial → menu → input → submenu → input → result). Every leg is one HTTP round-trip to your handler.</p>
+
+<!-- ============================== 2 ============================== -->
+<h2 id="onboard">2. Onboarding checklist</h2>
+<p>To onboard a shortcode you provide us with:</p>
+<table>
+  <thead>
+    <tr><th>What</th><th>Why</th><th>Example</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Shortcode / partner slug</strong></td>
+      <td>Routing key. For Vodacom + Halotel = the dialed USSD code (e.g. <code>*123#</code>). For Airtel + Tigo = the partner-slug the MNO assigns to your URL (e.g. <code>glpair</code>, <code>glptigo</code>).</td>
+      <td><code>*123#</code> or <code>glptigo</code></td>
+    </tr>
+    <tr>
+      <td><strong>MNO</strong></td>
+      <td>Which network — one shortcode row per (MNO, code) pair.</td>
+      <td><code>vodacom</code></td>
+    </tr>
+    <tr>
+      <td><strong>Handler URL</strong></td>
+      <td>Where we POST traffic. HTTPS required in production.</td>
+      <td><code>https://api.example.com/ussd</code></td>
+    </tr>
+    <tr>
+      <td><strong>Auth mode</strong></td>
+      <td><code>none</code> if you trust the inbound IP (VPN tunnel or IP-allowlisted), or <code>bearer</code> for a static token in the <code>Authorization</code> header.</td>
+      <td><code>bearer</code></td>
+    </tr>
+    <tr>
+      <td><strong>Bearer token</strong> (only if <code>auth_mode=bearer</code>)</td>
+      <td>Long random string. Rotate by emailing ops + redeploying.</td>
+      <td>64-char base64</td>
+    </tr>
+    <tr>
+      <td><strong>Per-leg timeout</strong></td>
+      <td>How long we wait for your handler reply. Default 5s; max 10s. Stay well under the MNO's session budget.</td>
+      <td><code>5</code></td>
+    </tr>
+    <tr>
+      <td><strong>Owner email</strong></td>
+      <td>The portal user that sees this shortcode's reports + can manage it.</td>
+      <td><code>ops@example.com</code></td>
+    </tr>
+  </tbody>
+</table>
+<p>Once provisioned, MNO traffic to your code/slug starts flowing immediately.</p>
+
+<!-- ============================== 3 ============================== -->
+<h2 id="request" class="pagebreak">3. Request shape — what we POST to your handler</h2>
+<figure>
+  <figcaption>Gateway → handler request</figcaption>
+  <pre>POST  https://api.example.com/ussd
+Content-Type: application/json
+Authorization: Bearer &lt;your-token&gt;          # only if auth_mode=bearer
+
+{
+  "operator":     "vodacom",
+  "msisdn":       "255712345678",
+  "session_id":   "ABC123",
+  "service_code": "*123#",
+  "ussd_string":  "1*2",
+  "event":        "start",
+  "raw_payload":  { ... full MNO-native payload ... }
+}</pre>
+</figure>
+
+<h3>Field reference</h3>
+<table>
+  <thead>
+    <tr><th>Field</th><th>Type</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>operator</code></td><td><code>"vodacom" | "airtel" | "tigo" | "halotel"</code></td><td>Canonical MNO key. Always present.</td></tr>
+    <tr><td><code>msisdn</code></td><td>string</td><td>International, <strong>no leading <code>+</code></strong> (e.g. <code>255712345678</code>). The subscriber's number.</td></tr>
+    <tr><td><code>session_id</code></td><td>string</td><td>MNO-issued session identifier. Stable across every leg of one USSD session. Use this as the key in your per-user session state.</td></tr>
+    <tr><td><code>service_code</code></td><td>string</td><td>What the user dialed (<code>*123#</code>) OR the partner slug (<code>glptigo</code>) — matches what was onboarded. Stable across legs.</td></tr>
+    <tr><td><code>ussd_string</code></td><td>string</td><td>Accumulated menu trail with <code>*</code> separators. Empty on <code>event=start</code>; grows on each <code>input</code> leg as <code>"1"</code>, then <code>"1*2"</code>, then <code>"1*2*9"</code>, etc.</td></tr>
+    <tr><td><code>event</code></td><td><code>"start" | "input"</code></td><td><code>start</code> = the first leg (the dial). <code>input</code> = every subsequent leg (the user pressed something on the previous menu).</td></tr>
+    <tr><td><code>raw_payload</code></td><td>object</td><td>The original MNO-native payload — useful for forensics / MNO-specific fields not in our unified shape. Don't rely on its structure (different per MNO).</td></tr>
+  </tbody>
+</table>
+
+<h3>Handler must be idempotent on <code>(session_id, ussd_string)</code></h3>
+<div class="callout warn">
+  USSD aggregators occasionally retransmit. If you receive the same <code>(session_id, ussd_string)</code> twice within a few seconds, treat the second as a retry and return the same answer — <strong>don't double-charge / double-write</strong>.
+</div>
+
+<!-- ============================== 4 ============================== -->
+<h2 id="reply">4. Reply shape — what your handler returns</h2>
+<p>You can return <strong>either</strong> of two formats. Pick whichever fits your stack; the gateway accepts both.</p>
+
+<h3>4a. JSON (preferred for new integrations)</h3>
+<figure>
+  <figcaption>CON — continue, prompt for input</figcaption>
+  <pre>HTTP/1.1 200 OK
+Content-Type: application/json
+
+{ "action": "CON", "message": "Choose option:\n1. Account balance\n2. Buy airtime" }</pre>
+</figure>
+<figure>
+  <figcaption>END — terminate session</figcaption>
+  <pre>HTTP/1.1 200 OK
+Content-Type: application/json
+
+{ "action": "END", "message": "Your balance: 1,250 TZS" }</pre>
+</figure>
+
+<h3>4b. Plain text (matches existing aggregator conventions)</h3>
+<figure>
+  <figcaption>CON — plain text</figcaption>
+  <pre>HTTP/1.1 200 OK
+Content-Type: text/plain
+
+CON Choose option:
+1. Account balance
+2. Buy airtime</pre>
+</figure>
+<figure>
+  <figcaption>END — plain text</figcaption>
+  <pre>HTTP/1.1 200 OK
+Content-Type: text/plain
+
+END Your balance: 1,250 TZS</pre>
+</figure>
+
+<h3>Action meaning</h3>
+<table>
+  <thead>
+    <tr><th>action</th><th>What the user sees</th><th>Session continues?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><span class="pill con">CON</span></td><td>Your <code>message</code> displayed; <strong>input box appears below</strong> for the next leg.</td><td>yes — gateway expects another inbound leg with <code>event="input"</code></td></tr>
+    <tr><td><span class="pill end">END</span></td><td>Your <code>message</code> displayed; <strong>no input box</strong>. Session terminates after they read it.</td><td>no — final leg</td></tr>
+  </tbody>
+</table>
+
+<h3>Message limits</h3>
+<div class="callout">
+  USSD frames have a hard limit of <strong>~182 characters</strong> (depends on MNO/handset). Keep messages short, count newlines as characters. Long messages get truncated by the MNO — test on a real device before going live.
+</div>
+
+<!-- ============================== 5 ============================== -->
+<h2 id="lifecycle" class="pagebreak">5. Lifecycle — what <code>event</code> will I see?</h2>
+<p>The gateway only ever forwards two lifecycle events to your handler:</p>
+<table>
+  <thead>
+    <tr><th>event</th><th>When</th><th>What ussd_string is</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>start</code></td><td>First leg — the user just dialed your code</td><td><code>""</code> (empty)</td></tr>
+    <tr><td><code>input</code></td><td>Subsequent leg — the user pressed something on the previous menu</td><td>accumulated trail (e.g. <code>"1"</code>, <code>"1*2"</code>, <code>"1*2*9"</code>)</td></tr>
+  </tbody>
+</table>
+<p><strong>You will NEVER see:</strong></p>
+<ul>
+  <li><code>user_cancelled</code> — the user pressed Cancel. The gateway acks the MNO directly and your session is silently gone.</li>
+  <li><code>timeout</code> — the MNO closed the session (took too long between legs).</li>
+  <li><code>charge_failed</code> (Vodacom premium-rate) — Vodacom's billing said no.</li>
+  <li>Halotel's <code>display_ack</code> (type=103) — informational; no need to act.</li>
+</ul>
+<div class="callout tip">
+  If you maintain server-side session state keyed by <code>session_id</code>, expire it after <strong>~2 minutes of inactivity</strong> (USSD sessions live ~60–90s typically). You won't get notified when a session ends without an <code>END</code> from you.
+</div>
+
+<!-- ============================== 6 ============================== -->
+<h2 id="auth">6. Authentication</h2>
+<table>
+  <thead>
+    <tr><th>Mode</th><th>When to use</th><th>What we send</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>none</code></td><td>Your handler is on a private VPN + IP-allowlist that only we can reach.</td><td>No <code>Authorization</code> header.</td></tr>
+    <tr><td><code>bearer</code></td><td>Public handler (or layered defence over network controls).</td><td><code>Authorization: Bearer &lt;your-token&gt;</code> — exact string match. Token never rotates without your action; we don't auto-rotate.</td></tr>
+  </tbody>
+</table>
+<p><strong>To rotate a bearer token:</strong> email ops with the new value; we'll update the DB row at a coordination time. Plan for a brief window where both old and new tokens are accepted on your side.</p>
+<p>We do <strong>not</strong> sign request bodies (no HMAC). If body integrity matters to you, terminate TLS on your handler and trust the connection.</p>
+
+<!-- ============================== 7 ============================== -->
+<h2 id="timeouts">7. Timeouts, retries, error handling</h2>
+
+<h3>Timeouts</h3>
+<ul>
+  <li>We wait <strong>at most <code>timeout_secs</code></strong> (per-shortcode, default 5s) for your reply.</li>
+  <li>If you don't respond in time, the gateway sends the MNO an <code>END Service unavailable</code> and logs the leg with <code>error_class="timeout"</code>.</li>
+  <li><strong>Plan for ≤ 3s p99 latency</strong> in your handler. The MNO's overall session budget is ~10s; we need to leave headroom for the round-trip back to them.</li>
+</ul>
+
+<h3>Retries</h3>
+<div class="callout warn">
+  USSD has <strong>no retry semantics</strong>. We do <strong>not</strong> retry your handler if it errors or times out — the user sees <code>Service unavailable</code> and the session is over. If your handler is briefly unhealthy, sessions during that window are lost. There's no make-up later. Build for low-latency, high-availability.
+</div>
+
+<h3>What happens on each error class</h3>
+<table>
+  <thead>
+    <tr><th>Handler returns</th><th>What the user sees</th><th>Logged error_class</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>HTTP 4xx / 5xx</td><td><code>END Service unavailable. Please try later.</code></td><td><code>non2xx</code></td></tr>
+    <tr><td>Connection timeout / refused</td><td>same</td><td><code>transport</code></td></tr>
+    <tr><td>Reply that isn't valid <code>CON</code>/<code>END</code> JSON or plain text</td><td>same</td><td><code>unparseable</code></td></tr>
+    <tr><td><code>200 OK</code> with valid <code>CON ...</code> / <code>END ...</code></td><td>your <code>message</code></td><td>(no error)</td></tr>
+  </tbody>
+</table>
+<p>All errors are logged with the full <code>raw_payload</code>, your handler URL, and the elapsed time. The shortcode owner sees these on the dashboard immediately.</p>
+
+<!-- ============================== 8 ============================== -->
+<h2 id="mno" class="pagebreak">8. Per-MNO quirks worth knowing</h2>
+<p>These are all handled by the gateway; your handler sees the unified shape. They're documented here so you understand what arrives:</p>
+
+<h3><span class="pill vodacom">Vodacom</span> TruRoute XML</h3>
+<ul>
+  <li>MNO uses XML POST or GET to us; gets translated to JSON for you.</li>
+  <li>Premium charging (<code>type=10</code>) is filtered out before reaching you.</li>
+  <li><code>service_code</code> is the dialed code (<code>*123#</code>).</li>
+</ul>
+
+<h3><span class="pill airtel">Airtel</span></h3>
+<ul>
+  <li>Per-partner URLs at the MNO (your slug <code>glpair</code> is the routing key on our side).</li>
+  <li>No first-leg flag from the MNO — we detect via session-cache presence.</li>
+  <li><code>service_code</code> is your partner slug (e.g. <code>glpair</code>).</li>
+  <li>The actual dialed USSD (e.g. <code>*147*03#</code>) appears in <code>raw_payload.dialed_code</code> on the <code>start</code> leg only.</li>
+</ul>
+
+<h3><span class="pill tigo">Tigo</span> (Yas)</h3>
+<ul>
+  <li>Two parameter schemes in concurrent use at the MNO (we abstract both). The dialed code appears in <code>raw_payload.dialed_code</code>.</li>
+  <li><code>service_code</code> is your partner slug (e.g. <code>glptigo</code>).</li>
+</ul>
+
+<h3><span class="pill halotel">Halotel</span></h3>
+<ul>
+  <li>The only MNO with <strong>bidirectional SOAP</strong>: our reply to your <code>CON</code>/<code>END</code> is pushed back to Halotel on a separate HTTP call (not the same response cycle). Transparent to you.</li>
+  <li>If you reply <code>END</code> and the outbound push fails (Halotel transient outage), the customer's USSD session times out on Halotel's side; we cannot recover within the session window.</li>
+</ul>
+
+<!-- ============================== 9 ============================== -->
+<h2 id="reference" class="pagebreak">9. Reference handler implementations</h2>
+
+<h3>Python (Flask)</h3>
+<figure>
+  <figcaption>handler.py</figcaption>
+  <pre>from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+SESSIONS = {}   # in-memory; use Redis in production
+
+@app.post("/ussd")
+def ussd():
+    # Optional: validate bearer token
+    # if request.headers.get("Authorization") != f"Bearer {TOKEN}":
+    #     return ("", 401)
+
+    body        = request.get_json(force=True)
+    session_id  = body["session_id"]
+    msisdn      = body["msisdn"]
+    ussd_string = body["ussd_string"]
+    event       = body["event"]
+
+    # Branch the menu by the accumulated input trail.
+    if event == "start":
+        SESSIONS[session_id] = {"started_at": time.time()}
+        return jsonify(action="CON",
+                       message="Welcome!\n1. Balance\n2. Buy airtime")
+
+    trail = ussd_string.split("*")
+    if trail == ["1"]:
+        balance = lookup_balance(msisdn)
+        return jsonify(action="END", message=f"Your balance: {balance} TZS")
+
+    if trail == ["2"]:
+        return jsonify(action="CON", message="Enter amount in TZS:")
+
+    if trail[0] == "2" and len(trail) == 2:
+        amount = int(trail[1])
+        # …charge logic…
+        return jsonify(action="END", message=f"Bought {amount} TZS.")
+
+    return jsonify(action="END", message="Invalid option")
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8081)</pre>
+</figure>
+
+<h3>Node.js (Express)</h3>
+<figure>
+  <figcaption>handler.js</figcaption>
+  <pre>const express = require("express");
+const app = express();
+app.use(express.json());
+
+const sessions = new Map();   // use Redis in production
+
+app.post("/ussd", (req, res) =&gt; {
+  const { session_id, msisdn, ussd_string, event } = req.body;
+
+  if (event === "start") {
+    sessions.set(session_id, { startedAt: Date.now() });
+    return res.json({ action: "CON",
+                      message: "Welcome!\n1. Balance\n2. Buy airtime" });
+  }
+
+  const trail = ussd_string.split("*");
+  if (trail.join("*") === "1") {
+    return res.json({ action: "END",
+                      message: `Your balance: ${lookupBalance(msisdn)} TZS` });
+  }
+  if (trail.join("*") === "2") {
+    return res.json({ action: "CON", message: "Enter amount in TZS:" });
+  }
+  if (trail[0] === "2" &amp;&amp; trail.length === 2) {
+    const amount = parseInt(trail[1], 10);
+    // …charge logic…
+    return res.json({ action: "END", message: `Bought ${amount} TZS.` });
+  }
+  return res.json({ action: "END", message: "Invalid option" });
+});
+
+app.listen(8081, "0.0.0.0");</pre>
+</figure>
+
+<!-- ============================== 10 ============================== -->
+<h2 id="testing" class="pagebreak">10. Testing against a non-production gateway</h2>
+<p>Once you've stood up your handler, ask ops to point a sandbox shortcode (e.g. <code>*150*99#</code> on Vodacom) at your URL. You can then dial from any test SIM. Or, simulate the gateway directly with curl:</p>
+<figure>
+  <figcaption>Simulate the START leg</figcaption>
+  <pre>curl -sS -X POST https://api.example.com/ussd \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer your-token' \
+  -d '{
+        "operator":     "vodacom",
+        "msisdn":       "255700000001",
+        "session_id":   "TEST-SESSION-1",
+        "service_code": "*150*99#",
+        "ussd_string":  "",
+        "event":        "start",
+        "raw_payload":  {}
+      }'</pre>
+</figure>
+<figure>
+  <figcaption>Simulate the INPUT leg "1"</figcaption>
+  <pre>curl -sS -X POST https://api.example.com/ussd \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer your-token' \
+  -d '{
+        "operator":     "vodacom",
+        "msisdn":       "255700000001",
+        "session_id":   "TEST-SESSION-1",
+        "service_code": "*150*99#",
+        "ussd_string":  "1",
+        "event":        "input",
+        "raw_payload":  {}
+      }'</pre>
+</figure>
+<div class="callout tip">
+  If both round-trips return well-formed <code>CON</code>/<code>END</code> JSON in under a second, you're ready for live traffic.
+</div>
+
+<!-- ============================== 11 ============================== -->
+<h2 id="reports">11. Reports + reconciliation</h2>
+<p>The owner email you provided gets a dashboard login. There they can:</p>
+<ul>
+  <li>See every leg / session attributed to their shortcode (real time).</li>
+  <li>Filter by date / MNO / msisdn / session_id / error class.</li>
+  <li>See <strong>per-MNO billable session counts</strong> (<code>CEIL(duration / window)</code> — Vodacom 20s, Airtel/Tigo 30s, Halotel per-leg) so they can reconcile against the MNO invoice.</li>
+  <li>Export filtered slices to CSV (queued; download link appears when ready).</li>
+</ul>
+<p>If you need a service account that can reach the dashboard API directly (e.g. to pull daily totals into your own BI), email ops.</p>
+
+<!-- ============================== 12 ============================== -->
+<h2 id="faq" class="pagebreak">12. FAQ</h2>
+
+<h4>Q: Why do I sometimes see <code>event="start"</code> with a non-empty <code>ussd_string</code>?</h4>
+<p>A: You shouldn't. <code>start</code> always carries an empty <code>ussd_string</code>. If you do see it, treat it as a rare aggregator retransmit and respond normally.</p>
+
+<h4>Q: My handler is fast but I'm seeing <code>error_class="timeout"</code> on the dashboard.</h4>
+<p>A: Check the network path — DNS, TLS handshake, and our egress latency all count toward the timeout. Ask ops to raise <code>timeout_secs</code> on your shortcode if the round-trip genuinely needs &gt;5s, but that eats into the MNO's session budget.</p>
+
+<h4>Q: How do I correlate dashboard logs with my own logs?</h4>
+<p>A: Use <code>session_id</code> — it's MNO-issued and stable across every leg. We log it on every row; you should log it on every handler entry.</p>
+
+<h4>Q: What if I need to send multiple SMS / push notifications as part of the USSD flow?</h4>
+<p>A: Send them asynchronously AFTER replying <code>END</code> — don't block the handler response on slow side-effects. The USSD session is over once you reply; the user is gone from the USSD screen and won't see anything you do afterwards.</p>
+
+<h4>Q: How do I deactivate a shortcode temporarily?</h4>
+<p>A: Email ops or use the dashboard if you're a super_admin. Soft-deactivation (<code>active=false</code>) means we return <code>Service not configured</code> to anyone who dials it; reactivating restores routing immediately. Historical reports are preserved either way.</p>
+
+<h4>Q: Do you support charging (premium-rate USSD)?</h4>
+<p>A: Currently the gateway forwards Vodacom premium-charge failure notifications but does NOT initiate charges itself. If you need premium billing, raise it with ops — it requires extending the <code>UnifiedReply</code> contract with a <code>premium</code> block (Vodacom TruRoute spec exposes the hook; not yet wired through).</p>
+
+<!-- ============================== 13 ============================== -->
+<h2 id="contacts">13. Operational contacts</h2>
+<table>
+  <thead>
+    <tr><th>Purpose</th><th>Contact</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Onboarding / config changes</td><td><em>[partner-ops@example.com]</em></td></tr>
+    <tr><td>Production incidents</td><td><em>[oncall@example.com]</em></td></tr>
+    <tr><td>Security / token rotation</td><td><em>[security@example.com]</em></td></tr>
+  </tbody>
+</table>
+<div class="callout warn">
+  <strong>Owners</strong> — replace these placeholders with your real distribution lists before sharing externally.
+</div>
+
+<div class="callout tip" style="margin-top:24px;">
+  <strong>Related docs.</strong> The companion runbooks live in the repo under <code>docs/</code> — <code>partner-quickstart.md</code>, the machine-readable <code>openapi.yaml</code>, and the per-MNO notes (<code>mno-vodacom-truroute.md</code>, <code>mno-airtel.md</code>, <code>mno-tigo.md</code>, <code>mno-halotel.md</code>).
+</div>
+
+</section>
+
+</body>
+</html>

@@ -71,8 +71,12 @@ export function requiredPermFor(pathname: string): PermKey[] | null {
   if (pathname === "/"
       || pathname.startsWith("/reports") || pathname.startsWith("/sessions")
       || pathname.startsWith("/summary")
+      || pathname.startsWith("/simulator")
       || pathname.startsWith("/api/reports") || pathname.startsWith("/api/sessions")
       || pathname.startsWith("/api/summary")) {
+    // The handler simulator lets an owner test THEIR own handler; the
+    // per-shortcode ownership scope is enforced in the server action
+    // (@/lib/simulator) against the JWT allowlist, same as reports.
     return [Perms.REPORTS_VIEW_OWN, Perms.REPORTS_VIEW_ALL];
   }
 
