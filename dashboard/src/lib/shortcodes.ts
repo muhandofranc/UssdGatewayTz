@@ -234,6 +234,19 @@ export async function setShortcodeStatus(
   );
 }
 
+// Update ONLY the handler URL. Used by owner/clients from /my-shortcodes
+// (scoped to their own shortcodes in the server action) and by admins.
+// Deliberately narrow — it never touches operator/code/owner/auth/token,
+// so a client can't escalate via this path.
+export async function setShortcodeHandlerUrl(
+  id: number, handlerUrl: string,
+): Promise<void> {
+  await query(
+    `UPDATE shortcodes SET handler_url = $2, updated_at = now() WHERE id = $1`,
+    [id, handlerUrl],
+  );
+}
+
 // Back-compat shim — pre-007 callers used setShortcodeActive(id, bool).
 export async function setShortcodeActive(
   id: number, active: boolean, byUserId: number,

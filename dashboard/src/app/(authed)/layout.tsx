@@ -114,6 +114,7 @@ export default async function AuthedLayout({
               <Link href="/sessions"    className="hover:text-onfon-red transition-colors">Sessions</Link>
               <Link href="/reports"     className="hover:text-onfon-red transition-colors">Legs</Link>
               <Link href="/integration" className="hover:text-onfon-red transition-colors">Integration</Link>
+              <Link href="/simulator"   className="hover:text-onfon-red transition-colors">Simulator</Link>
               {canSeeShortcodesAdmin
                 ? <Link href="/shortcodes" className="hover:text-onfon-red transition-colors">Shortcodes</Link>
                 : null}

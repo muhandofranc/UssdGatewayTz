@@ -18,8 +18,8 @@ import { headers } from "next/headers";
 import { getSession, hasPerm } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
 import {
-  codeExists, createShortcode, setShortcodeActive, setShortcodeStatus,
-  updateShortcode, type ShortcodeStatus, type ShortcodeWrite,
+  codeExists, createShortcode, setShortcodeActive, setShortcodeHandlerUrl,
+  setShortcodeStatus, updateShortcode, type ShortcodeStatus, type ShortcodeWrite,
 } from "@/lib/shortcodes";
 import { audit, clientIp } from "@/lib/audit";
 
@@ -171,6 +171,47 @@ export async function actionSetShortcodeActive(id: number, active: boolean) {
  * The owner check requires looking up the row's owner_user_id; we do
  * that with a single SELECT before the UPDATE.
  */
+/**
+ * Update ONLY the handler URL of a shortcode. Owners/clients may do this
+ * for shortcodes they own (checked here, same as the status action);
+ * super_admins may do it for any. Never touches any other field.
+ */
+export async function actionSetShortcodeHandlerUrl(id: number, url: string) {
+  const session = await getSession();
+  if (!session) redirect("/");
+  const isAdmin = hasPerm(session, Perms.SHORTCODES_MANAGE);
+
+  // Non-admins may only edit a shortcode they own.
+  if (!isAdmin) {
+    const { getShortcode } = await import("@/lib/shortcodes");
+    const sc = await getShortcode(id);
+    if (!sc || sc.owner_user_id !== Number(session.sub)) {
+      return redirect("/my-shortcodes?error=not_authorized");
+    }
+  }
+
+  const dest = isAdmin ? `/shortcodes/${id}` : "/my-shortcodes";
+  const handler = (url ?? "").trim();
+  if (!handler || !/^https?:\/\//i.test(handler)) {
+    return redirect(dest + `?error=${encodeURIComponent("handler URL must start with http:// or https://")}`);
+  }
+  if (handler.length > 2048) {
+    return redirect(dest + `?error=${encodeURIComponent("handler URL too long (max 2048 chars)")}`);
+  }
+
+  await setShortcodeHandlerUrl(id, handler);
+  const meta = await reqMeta();
+  await audit({
+    actor: session.email, action: "shortcode.handler_url.update",
+    target: String(id), outcome: "success",
+    ip: meta.ip, userAgent: meta.ua,
+    detail: { id, handler_url: handler },
+  });
+  revalidatePath("/shortcodes");
+  revalidatePath(`/shortcodes/${id}`);
+  revalidatePath("/my-shortcodes");
+}
+
 export async function actionSetShortcodeStatus(
   id: number, status: ShortcodeStatus, message: string | null,
 ) {

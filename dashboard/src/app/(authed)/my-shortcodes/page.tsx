@@ -12,7 +12,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { listShortcodesOwnedBy, type ShortcodeRow } from "@/lib/shortcodes";
-import { actionSetShortcodeStatus } from "../shortcodes/actions";
+import { actionSetShortcodeStatus, actionSetShortcodeHandlerUrl } from "../shortcodes/actions";
 
 export default async function MyShortcodesPage({
   searchParams,
@@ -89,6 +89,15 @@ function OwnerCard({ row: r }: { row: ShortcodeRow }) {
       encodeURIComponent(`${r.operator_name} ${r.code} is in maintenance.`),
     );
   };
+  const saveHandler = async (fd: FormData) => {
+    "use server";
+    const url = (fd.get("handler_url")?.toString() ?? "").trim();
+    await actionSetShortcodeHandlerUrl(r.id, url);
+    redirect(
+      "/my-shortcodes?ok=" +
+      encodeURIComponent(`${r.operator_name} ${r.code} handler URL updated.`),
+    );
+  };
 
   return (
     <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
@@ -152,6 +161,35 @@ function OwnerCard({ row: r }: { row: ShortcodeRow }) {
           )}
         </form>
       )}
+
+      {/* Handler URL — the one config field an owner may edit themselves.
+          Ownership + validation enforced in actionSetShortcodeHandlerUrl. */}
+      <form action={saveHandler} className="mt-3 border-t border-slate-200 dark:border-slate-800 pt-3 space-y-2">
+        <label className="block text-xs text-slate-500">
+          Handler URL — where the gateway POSTs this shortcode&rsquo;s USSD traffic
+        </label>
+        <div className="flex gap-2">
+          <input
+            name="handler_url"
+            type="url"
+            inputMode="url"
+            required
+            defaultValue={r.handler_url}
+            placeholder="https://your-handler.example/ussd"
+            className="flex-1 rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 text-sm font-mono"
+          />
+          <button
+            type="submit"
+            className="rounded-md bg-slate-700 hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500 text-white px-3 py-1.5 text-sm font-medium whitespace-nowrap"
+          >
+            Save URL
+          </button>
+        </div>
+        <p className="text-[10px] text-slate-500">
+          Must start with <code>http://</code> or <code>https://</code>. This is the only
+          field you can change here — code, operator and auth are managed by a Super Admin.
+        </p>
+      </form>
 
       {r.status_set_at ? (
         <div className="mt-3 text-[10px] text-slate-500">
