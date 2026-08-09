@@ -47,11 +47,20 @@ function asPositiveInt(v: string | string[] | undefined, fallback: number, max?:
 }
 
 /** /sessions caps the date range to this many days. The per-session
- *  aggregation touches every leg in the window; anything wider risks
- *  a timeout even with the composite index. The FilterBar hides the
- *  30d quick-pick when this is passed; parseFilters clamps as a
- *  defence-in-depth against deep-linked URLs and manual date entry. */
-const SESSIONS_MAX_WINDOW_DAYS = 7;
+ *  aggregation touches every leg in the window; wider windows are
+ *  slower but now run on the dedicated report pool (longer timeout,
+ *  isolated from interactive queries — see lib/db.ts reportPool), so
+ *  the cap is generous rather than tight. FilterBar drops quick-picks
+ *  wider than this; parseFilters clamps as defence-in-depth against
+ *  deep-linked URLs and manual date entry.
+ *
+ *  Tunable via DASHBOARD_SESSIONS_MAX_WINDOW_DAYS. Set to 0 to remove
+ *  the clamp entirely (any range allowed; the report-pool timeout +
+ *  the "too long" panel become the only backstops). */
+const SESSIONS_MAX_WINDOW_DAYS = (() => {
+  const n = Number(process.env.DASHBOARD_SESSIONS_MAX_WINDOW_DAYS ?? 92);
+  return Number.isFinite(n) && n >= 0 ? n : 92;
+})();
 
 /** Result of parseFilters. `clampedFrom` is set when the user asked
  *  for a wider window than SESSIONS_MAX_WINDOW_DAYS and we shortened
@@ -79,7 +88,7 @@ function parseFilters(sp: Awaited<PageProps["searchParams"]>): ParsedFilters {
   // `from` forward so the range is exactly SESSIONS_MAX_WINDOW_DAYS.
   // Uses the parsed toTs (or "now" when unset) as the anchor.
   const windowDays = daysBetween(raw.fromTs, raw.toTs);
-  if (raw.fromTs && windowDays > SESSIONS_MAX_WINDOW_DAYS) {
+  if (raw.fromTs && SESSIONS_MAX_WINDOW_DAYS > 0 && windowDays > SESSIONS_MAX_WINDOW_DAYS) {
     const anchor = raw.toTs ? new Date(raw.toTs) : new Date();
     const clampedIso = new Date(
       anchor.getTime() - SESSIONS_MAX_WINDOW_DAYS * 24 * 3600 * 1000,
@@ -215,7 +224,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
               : <>Try one of these to narrow it down:</>}
           </p>
           <ul className="mt-2 list-disc pl-5 text-amber-900 dark:text-amber-200">
-            <li>Shorten the date range to 7&nbsp;days or fewer.</li>
+            <li>Shorten the date range.</li>
             <li>Filter by MNO or shortcode.</li>
             <li>Use&nbsp;
               <Link href={`/summary${sp.from || sp.to ? "?" : ""}${sp.from ? `from=${sp.from}` : ""}${sp.from && sp.to ? "&" : ""}${sp.to ? `to=${sp.to}` : ""}`}
@@ -286,7 +295,7 @@ export default async function SessionsPage({ searchParams }: PageProps) {
         </div>
       </div>
 
-      <FilterBar basePath="/sessions" sp={sp} maxWindowDays={SESSIONS_MAX_WINDOW_DAYS} />
+      <FilterBar basePath="/sessions" sp={sp} maxWindowDays={SESSIONS_MAX_WINDOW_DAYS > 0 ? SESSIONS_MAX_WINDOW_DAYS : undefined} />
       {clampedFrom ? (
         <p className="text-xs text-slate-500 -mt-3">
           Showing the last {SESSIONS_MAX_WINDOW_DAYS}&nbsp;days &mdash; this view is

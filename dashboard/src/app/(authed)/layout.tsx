@@ -16,6 +16,7 @@ import { Perms } from "@/lib/rbac";
 import SidebarNav, { type NavItem } from "./_nav";
 import ThemeToggle from "@/components/ThemeToggle";
 import TopProgress from "./_topProgress";
+import SearchProgress from "./_searchProgress";
 
 export default async function AuthedLayout({
   children,
@@ -72,6 +73,7 @@ export default async function AuthedLayout({
   return (
     <div className="min-h-screen md:grid md:grid-cols-[14rem_1fr]">
       <TopProgress />
+      <SearchProgress />
       {/* Sidebar — same dark slate as the topbar, edge-to-edge from
        * the very top so the chrome reads as one continuous surface;
        * the main content area pops in light. Brand identity is

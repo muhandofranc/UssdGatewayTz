@@ -1,4 +1,6 @@
-# Local docker env — secrets. Never commit.
+# Local docker env — per-environment, never committed. The canonical
+# reference is docker-compose.example.yml; each host keeps its own
+# docker-compose.yml (copy the example and adjust). Secrets live in .env.
 .env
 docker-compose.yml
 
@@ -18,7 +20,6 @@ venv/
 .vscode/
 .DS_Store
 Thumbs.db
-docker-compose.yml
 
 # Node / Next.js — never commit build artefacts or installed deps
 node_modules/

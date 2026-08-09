@@ -54,9 +54,34 @@ function readPgConfig(): PoolConfig {
   };
 }
 
+// Report pool — a SEPARATE, small pool for the heavy analytical queries
+// (per-session / per-leg aggregations over wide date ranges). Two reasons it
+// exists apart from the main pool:
+//   1. Longer budget. Its statement_timeout/query_timeout are minutes, not
+//      seconds, so a legitimately large window (months of data) can finish
+//      instead of being killed at 30s like an interactive query.
+//   2. Isolation. Capped at a handful of connections so a few users running
+//      huge reports can't monopolise the main pool and hang the fast pages
+//      (Overview, login, nav). Report queries queue among THEMSELVES here.
+// Same ordering rule as the main pool: query_timeout > statement_timeout so PG
+// fires 57014 first and the page's friendly "too long" panel catches it.
+function readReportPgConfig(): PoolConfig {
+  const base = readPgConfig();
+  return {
+    ...base,
+    application_name: "ussd_gw_dashboard_reports",
+    max: Number(process.env.DASHBOARD_REPORT_PG_POOL_MAX || 4),
+    statement_timeout: Number(process.env.DASHBOARD_REPORT_PG_STATEMENT_TIMEOUT_MS || 180_000),
+    query_timeout:     Number(process.env.DASHBOARD_REPORT_PG_QUERY_TIMEOUT_MS     || 190_000),
+  };
+}
+
 // One pool per process. Next.js dev mode HMR can re-import this
 // module; cache the pool on globalThis to avoid leaking pools.
-declare global { var __ussdDashPool: Pool | undefined; }
+declare global {
+  var __ussdDashPool: Pool | undefined;
+  var __ussdReportPool: Pool | undefined;
+}
 export const pool: Pool =
   globalThis.__ussdDashPool ?? (globalThis.__ussdDashPool = (() => {
     const p = new Pool(readPgConfig());
@@ -71,10 +96,28 @@ export const pool: Pool =
     return p;
   })());
 
+export const reportPool: Pool =
+  globalThis.__ussdReportPool ?? (globalThis.__ussdReportPool = (() => {
+    const p = new Pool(readReportPgConfig());
+    p.on("error", (err) => {
+      console.error("[db.reportPool] idle client error:", err);
+    });
+    return p;
+  })());
+
 export async function query<T extends QueryResultRow = any>(
   text: string, params?: any[],
 ): Promise<QueryResult<T>> {
   return pool.query<T>(text, params);
+}
+
+/** Run a heavy analytical query on the dedicated report pool (longer timeout,
+ *  isolated from the interactive pool). Use for the per-session / per-leg
+ *  aggregations that can legitimately take a while on wide windows. */
+export async function reportQuery<T extends QueryResultRow = any>(
+  text: string, params?: any[],
+): Promise<QueryResult<T>> {
+  return reportPool.query<T>(text, params);
 }
 
 export async function withTx<T>(

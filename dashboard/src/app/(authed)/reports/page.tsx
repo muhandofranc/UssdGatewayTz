@@ -202,7 +202,7 @@ export default async function ReportsPage({ searchParams }: PageProps) {
           </p>
           <p className="mt-1 text-amber-800 dark:text-amber-200">
             {windowDays > 0 ? <>You&rsquo;re looking at <span className="font-mono">{windowDays}</span>&nbsp;day{windowDays === 1 ? "" : "s"} of legs. </> : null}
-            Try a shorter date range (use the <span className="font-mono">1h</span> / <span className="font-mono">24h</span> / <span className="font-mono">7d</span> shortcuts), filter by MNO or shortcode, or use{" "}
+            Try a shorter date range, filter by MNO or shortcode, or use{" "}
             <Link href="/summary" className="underline">Reports&nbsp;Summary</Link> for aggregate counts over long windows.
           </p>
         </div>

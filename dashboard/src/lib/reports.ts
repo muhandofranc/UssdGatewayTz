@@ -15,7 +15,7 @@
  * that we show "10,000+" instead of paying for a full COUNT(*) on
  * the partitioned-future ussd_session_logs).
  */
-import { query } from "./db";
+import { query, reportQuery } from "./db";
 
 export const MAX_PAGE_SIZE = 100;
 export const COUNT_CAP = 10_000;
@@ -132,7 +132,7 @@ export async function loadReportPage(
         LIMIT ${COUNT_CAP + 1}
       ) capped
   `;
-  const countR = await query<{ c: string }>(countSql, where.params);
+  const countR = await reportQuery<{ c: string }>(countSql, where.params);
   const rawCount = Number(countR.rows[0]?.c ?? 0);
   const totalCapped = rawCount > COUNT_CAP;
   const totalKnown  = totalCapped ? COUNT_CAP : rawCount;
@@ -155,7 +155,7 @@ export async function loadReportPage(
   ORDER BY l.ts DESC, l.id DESC
      LIMIT ${ps} OFFSET ${offset}
   `;
-  const rowsR = await query<ReportRow>(rowsSql, where.params);
+  const rowsR = await reportQuery<ReportRow>(rowsSql, where.params);
   return { rows: rowsR.rows, totalKnown, totalCapped };
 }
 
@@ -221,7 +221,7 @@ export async function loadBillableSummary(
       FROM per_op
      ORDER BY operator_name
   `;
-  const r = await query<{
+  const r = await reportQuery<{
     operator_name: string;
     window_secs: number | null;
     sessions: string;
@@ -499,7 +499,7 @@ export async function loadSessionPage(
            LIMIT ${COUNT_CAP + 1}
         ) capped
     `;
-    const countR = await query<{ c: string }>(countSql, where.params);
+    const countR = await reportQuery<{ c: string }>(countSql, where.params);
     const rawCount = Number(countR.rows[0]?.c ?? 0);
     totalCapped = rawCount > COUNT_CAP;
     totalKnown = totalCapped ? COUNT_CAP : rawCount;
@@ -579,7 +579,7 @@ export async function loadSessionPage(
     ORDER BY g.last_ts DESC, g.session_id DESC
     LIMIT ${ps} OFFSET ${offset}
   `;
-  const rowsR = await query<SessionRow>(rowsSql, where.params);
+  const rowsR = await reportQuery<SessionRow>(rowsSql, where.params);
   return { rows: rowsR.rows, totalKnown, totalCapped };
 }
 

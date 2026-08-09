@@ -67,10 +67,11 @@ interface QuickPick {
 }
 
 const QUICK_PICKS: QuickPick[] = [
-  { label: "1h",  ms: 1   * 3600 * 1000 },
-  { label: "24h", ms: 24  * 3600 * 1000 },
-  { label: "7d",  ms: 168 * 3600 * 1000 },
-  { label: "30d", ms: 720 * 3600 * 1000 },
+  { label: "1h",  ms: 1    * 3600 * 1000 },
+  { label: "24h", ms: 24   * 3600 * 1000 },
+  { label: "7d",  ms: 168  * 3600 * 1000 },
+  { label: "30d", ms: 720  * 3600 * 1000 },
+  { label: "90d", ms: 2160 * 3600 * 1000 },
 ];
 
 function quickPickHref(

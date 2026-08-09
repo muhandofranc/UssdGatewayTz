@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Base font size for the whole app. Tailwind's `text-xs/sm/base/...`
+ * and spacing utilities are all rem-based, so bumping the root size
+ * scales every page up uniformly (bigger, more readable text to match
+ * company_docs_hub) without editing individual components. The browser
+ * default is 16px; 17px is a subtle ~6% enlargement. Nudge this ONE
+ * value (e.g. 18px) to go bigger, or back to 16px to revert. Font
+ * family is unchanged — Tailwind's default sans stack. */
+html { font-size: 17px; }
+
 /* Class-based dark mode (see tailwind.config.ts). The .dark class is
  * set on <html> by the no-flash script in app/layout.tsx before first
  * paint, then flipped by ThemeToggle. `color-scheme` tells the browser
