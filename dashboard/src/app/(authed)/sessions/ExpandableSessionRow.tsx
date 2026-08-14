@@ -23,14 +23,11 @@ type LegsState =
 /* -------- formatting helpers -------- */
 
 function fmtDuration(input: number | string): string {
-  const secs = Number(input);
+  const secs = Math.round(Number(input));
   if (!Number.isFinite(secs)) return "—";
-  if (secs < 1)  return `${secs.toFixed(2)}s`;
-  if (secs < 10) return `${secs.toFixed(1)}s`;
-  if (secs < 60) return `${Math.round(secs)}s`;
-  const total = Math.round(secs);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
   return `${m}m ${s.toString().padStart(2, "0")}s`;
 }
 
@@ -173,8 +170,14 @@ export default function ExpandableSessionRow({ row }: { row: SessionRow }) {
         <td className="px-2 py-1.5 text-xs font-mono whitespace-nowrap">{fmtTs(row.first_ts)}</td>
         <td className="px-2 py-1.5 text-xs font-mono whitespace-nowrap">{fmtTs(row.last_ts)}</td>
         <td className="px-2 py-1.5 text-xs text-right tabular-nums">
-          <span title={`${Math.round(Number(row.duration_secs) * 1000)} ms`} className="font-mono">
-            {fmtDuration(row.duration_secs)}
+          {/* Duration is the real elapsed time rounded UP to the whole second
+              (CEIL) — the same value billing uses, so a 20.2s session shows 21s
+              and bills 2, never 20s/1. Exact sub-second value on hover. */}
+          <span
+            title={`exact ${Number(row.duration_secs).toFixed(3)}s`}
+            className="font-mono"
+          >
+            {fmtDuration(Math.ceil(Number(row.duration_secs)))}
           </span>
         </td>
         <td className="px-2 py-1.5 text-xs text-right tabular-nums">{row.leg_count}</td>
@@ -187,7 +190,7 @@ export default function ExpandableSessionRow({ row }: { row: SessionRow }) {
           {row.billable_units !== null
             ? <span
                 className="font-mono"
-                title={`${Number(row.duration_secs).toFixed(1)}s ÷ ${row.billable_window_secs}s window → CEIL = ${row.billable_units} session${row.billable_units === 1 ? "" : "s"}`}
+                title={`${Math.ceil(Number(row.duration_secs))}s (rounded up from ${Number(row.duration_secs).toFixed(3)}s) ÷ ${row.billable_window_secs}s window → CEIL = ${row.billable_units} session${row.billable_units === 1 ? "" : "s"}`}
               >
                 {row.billable_units}
               </span>

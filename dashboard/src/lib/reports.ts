@@ -196,8 +196,10 @@ export async function loadBillableSummary(
   // compute totals against each operator's configured window.
   const sql = `
     WITH per_session AS (
+      -- Duration rounded UP to a whole second (see loadSessionPage) so the
+      -- summary totals match the per-row billable_units and Duration column.
       SELECT operator_name, session_id,
-             EXTRACT(EPOCH FROM (MAX(ts) - MIN(ts)))::float8 AS duration_secs
+             CEIL(EXTRACT(EPOCH FROM (MAX(ts) - MIN(ts))))::float8 AS duration_secs
         FROM ussd_session_logs l${where.sql}
        GROUP BY operator_name, session_id
     ),
@@ -566,9 +568,14 @@ export async function loadSessionPage(
       g.final_action, g.final_error_class,
       g.final_ussd_string, g.final_response_text,
       o.billable_window_secs,
+      -- Round the duration UP to a whole second first (inner CEIL), then CEIL
+      -- over the billing window. Rounding UP is required so a session that
+      -- spills even a fraction past a boundary bills the next window:
+      -- 20.2s -> ceil 21s -> CEIL(21/20) = 2 (flooring to 20s would wrongly
+      -- bill 1). The Duration column shows the same CEIL'd whole seconds.
       CASE WHEN o.billable_window_secs IS NOT NULL
            THEN GREATEST(1, CEIL(
-             EXTRACT(EPOCH FROM (g.last_ts - g.first_ts))::float8
+             CEIL(EXTRACT(EPOCH FROM (g.last_ts - g.first_ts)))::float8
              / o.billable_window_secs::float8
            ))::int
            ELSE NULL
