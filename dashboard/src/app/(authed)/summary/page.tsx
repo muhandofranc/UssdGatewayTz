@@ -116,7 +116,7 @@ export default async function SummaryPage({
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold">Daily summary</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Daily summary</h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
             Pre-aggregated daily counts of sessions, legs, errors, and
             billable units. Data through {" "}

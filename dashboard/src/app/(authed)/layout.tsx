@@ -70,20 +70,25 @@ export default async function AuthedLayout({
     items.push({ href: "/audit", label: "Audit log", matchPrefix: "/audit" });
   }
 
+  // Up-to-2-letter avatar initials from the display name.
+  const initials =
+    (session.name || "?")
+      .split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
+
   return (
     <div className="min-h-screen md:grid md:grid-cols-[14rem_1fr]">
       <TopProgress />
       <SearchProgress />
       {/* Sidebar — same dark slate as the topbar, edge-to-edge from
        * the very top so the chrome reads as one continuous surface;
-       * the main content area pops in light. Brand identity is
-       * carried by the Onfon "O" logo + gradient-clipped wordmark
-       * below, not a coloured strip. */}
+       * the main content area pops in light. Brand identity: a slim
+       * rainbow strip up top + the Onfon "O" logo + gradient wordmark. */}
       <aside className="hidden md:flex md:flex-col border-r border-slate-800 bg-slate-900 text-slate-200 sticky top-0 h-screen">
+        <div className="h-1 bg-brand-gradient" />
         <div className="px-4 py-4 border-b border-slate-800">
           <Link href="/" className="flex items-center gap-2">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo.svg" alt="" width={28} height={28} className="rounded-md" />
+            <img src="/logo.svg" alt="" width={28} height={28} className="rounded-md ring-1 ring-white/10" />
             <div className="flex flex-col leading-tight">
               <span className="font-semibold text-base brand-text">UssdGatewayTz</span>
               <span className="text-[10px] uppercase tracking-wider text-slate-400">
@@ -127,9 +132,15 @@ export default async function AuthedLayout({
                 : null}
             </nav>
             <div className="ml-auto flex items-center gap-3 text-sm">
-              <span className="text-slate-300">
-                {session.name} · <span className="font-mono text-white">{session.role}</span>
-              </span>
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-onfon-red/25 text-[11px] font-semibold text-white ring-1 ring-white/15">
+                  {initials}
+                </div>
+                <div className="hidden sm:flex flex-col leading-tight">
+                  <span className="text-slate-100">{session.name}</span>
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-slate-400">{session.role}</span>
+                </div>
+              </div>
               <ThemeToggle />
               <form action="/api/auth/logout" method="post">
                 <button
@@ -142,7 +153,9 @@ export default async function AuthedLayout({
             </div>
           </div>
         </header>
-        <main className="flex-1 px-6 py-6">{children}</main>
+        <main className="flex-1 px-6 py-6">
+          <div className="mx-auto w-full max-w-[100rem]">{children}</div>
+        </main>
       </div>
     </div>
   );

@@ -249,10 +249,15 @@ export default async function SessionsPage({ searchParams }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-baseline justify-between gap-4">
-        <h1 className="text-2xl font-semibold">Sessions</h1>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Sessions</h1>
+          <p className="mt-0.5 text-sm text-slate-500">
+            One row per session — duration, outcome &amp; billable units.
+          </p>
+        </div>
         <div className="flex items-center gap-3 text-sm">
-          <Link href="/reports" className="rounded-md border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-xs hover:bg-slate-100 dark:hover:bg-slate-800">
+          <Link href="/reports" className="rounded-md border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
             ← Per-leg view
           </Link>
           <div className="text-slate-500">

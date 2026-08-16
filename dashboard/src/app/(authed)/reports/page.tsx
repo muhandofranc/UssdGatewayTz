@@ -222,10 +222,15 @@ export default async function ReportsPage({ searchParams }: PageProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-baseline justify-between gap-4">
-        <h1 className="text-2xl font-semibold">Session legs</h1>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Session legs</h1>
+          <p className="mt-0.5 text-sm text-slate-500">
+            Every HTTP leg — filter by MNO, MSISDN, shortcode or date range.
+          </p>
+        </div>
         <div className="flex items-center gap-3 text-sm">
-          <Link href="/sessions" className="rounded-md border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-xs hover:bg-slate-100 dark:hover:bg-slate-800">
+          <Link href="/sessions" className="rounded-md border border-slate-300 dark:border-slate-700 px-2.5 py-1 text-xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
             View session summary →
           </Link>
           <div className="text-slate-500">
