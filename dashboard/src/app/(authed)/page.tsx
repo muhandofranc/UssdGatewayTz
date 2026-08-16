@@ -155,6 +155,20 @@ function TrafficBarChart({ rows, monthYM }: { rows: DailyTrafficRow[]; monthYM: 
   }
   const grandTotal = grid.reduce((s, g) => s + g.total, 0);
 
+  // Per-network totals (for the highest->lowest ranking) and the busiest /
+  // quietest day (day totals; quietest ignores no-traffic days like future
+  // dates in the current month).
+  const perOp: Record<string, number> = Object.fromEntries(OPERATORS.map((op) => [op, 0]));
+  let peakDay = 0;
+  let lowDay = Infinity;
+  for (const g of grid) {
+    for (const op of OPERATORS) perOp[op] += g.counts[op] ?? 0;
+    if (g.total > peakDay) peakDay = g.total;
+    if (g.total > 0 && g.total < lowDay) lowDay = g.total;
+  }
+  if (!Number.isFinite(lowDay)) lowDay = 0;
+  const ranked = [...OPERATORS].sort((a, b) => (perOp[b] ?? 0) - (perOp[a] ?? 0));
+
   return (
     <div>
       {/* Chart area — dashed gridlines behind, grouped bars in front.
@@ -199,18 +213,21 @@ function TrafficBarChart({ rows, monthYM }: { rows: DailyTrafficRow[]; monthYM: 
         ))}
       </div>
 
-      {/* Legend + peak + month total */}
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 dark:border-slate-800 pt-3">
-        <div className="flex flex-wrap gap-4 text-xs">
-          {OPERATORS.map((op) => (
+      {/* Network ranking (highest -> lowest) + day peak/low + month total */}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-slate-100 dark:border-slate-800 pt-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+          {ranked.map((op, i) => (
             <div key={op} className="flex items-center gap-1.5">
+              <span className="w-3 text-right tabular-nums text-slate-400">{i + 1}</span>
               <span className={`inline-block w-3 h-3 rounded-sm ${OPERATOR_FILL[op]}`} />
               <span className="capitalize text-slate-700 dark:text-slate-300">{op}</span>
+              <span className="font-mono tabular-nums text-slate-500">{(perOp[op] ?? 0).toLocaleString()}</span>
             </div>
           ))}
         </div>
         <div className="flex items-center gap-4 text-xs text-slate-500">
-          <span>peak/day <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300">{max.toLocaleString()}</span></span>
+          <span>peak/day <span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">{peakDay.toLocaleString()}</span></span>
+          <span>lowest/day <span className="font-mono tabular-nums text-amber-600 dark:text-amber-400">{lowDay.toLocaleString()}</span></span>
           <span>total <span className="font-mono tabular-nums text-slate-700 dark:text-slate-300">{grandTotal.toLocaleString()}</span></span>
         </div>
       </div>
