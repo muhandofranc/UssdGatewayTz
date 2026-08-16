@@ -3,9 +3,10 @@
  * Counts are scoped to the JWT's shortcodeIds (null = unrestricted
  * for super_admin).
  */
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
+import { unstable_cache } from "next/cache";
 import { getSession } from "@/lib/auth";
-import { query } from "@/lib/db";
+import { query, reportQuery } from "@/lib/db";
 import { loadDailyTraffic, type DailyTrafficRow } from "@/lib/overview";
 import Link from "next/link";
 
@@ -73,6 +74,60 @@ async function loadTotals(shortcodeIds: number[] | null): Promise<Totals> {
     params,
   );
   return r.rows[0]!;
+}
+
+interface TrailRow { ussd_string: string; n: number }
+
+/**
+ * Top USSD trails (most-dialed `ussd_string` values) for a period, scoped to
+ * the user's shortcodes. `mode` selects a specific day or the rolling 24h.
+ * Runs on the report pool — GROUP BY over a busy day is analytical, so keep it
+ * off the interactive pool.
+ */
+async function loadTopTrails(
+  shortcodeIds: number[] | null,
+  mode: { kind: "day"; date: string } | { kind: "today" },
+  limit = 8,
+): Promise<TrailRow[]> {
+  const conds: string[] = ["ussd_string IS NOT NULL", "ussd_string <> ''"];
+  const params: (string | number[])[] = [];
+  const next = (v: string | number[]) => { params.push(v); return `$${params.length}`; };
+  if (shortcodeIds !== null) {
+    if (shortcodeIds.length === 0) return [];
+    conds.push(`shortcode_id = ANY(${next(shortcodeIds)}::int[])`);
+  }
+  if (mode.kind === "day") {
+    const p = next(mode.date);
+    conds.push(`ts >= ${p}::date AND ts < (${p}::date + 1)`);
+  } else {
+    conds.push("ts >= now() - interval '24 hours'");
+  }
+  const r = await reportQuery<{ ussd_string: string; n: string }>(
+    `SELECT ussd_string, COUNT(*) AS n
+       FROM ussd_session_logs
+      WHERE ${conds.join(" AND ")}
+      GROUP BY ussd_string
+      ORDER BY n DESC, ussd_string
+      LIMIT ${limit}`,
+    params,
+  );
+  return r.rows.map((x) => ({ ussd_string: x.ussd_string, n: Number(x.n) }));
+}
+
+// Cross-request cache for the trails. A past peak day is effectively immutable,
+// so cache it for a day; today / last-24h refresh every 5 minutes. The DB scope
+// (shortcodeIds) is part of the key so users don't share each other's rows.
+function topTrailsCached(
+  shortcodeIds: number[] | null,
+  mode: { kind: "day"; date: string } | { kind: "today" },
+  revalidate: number,
+): Promise<TrailRow[]> {
+  const key = mode.kind === "day" ? `day:${mode.date}` : "today";
+  return unstable_cache(
+    () => loadTopTrails(shortcodeIds, mode),
+    ["top-trails", key, JSON.stringify(shortcodeIds ?? "all")],
+    { revalidate },
+  )();
 }
 
 // ---------------------------------------------------------------------
@@ -309,6 +364,118 @@ function QuickLinks() {
   );
 }
 
+function TrailList({ title, subtitle, trails }: {
+  title: string;
+  subtitle: string;
+  trails: TrailRow[];
+}) {
+  const max = trails.reduce((m, t) => Math.max(m, t.n), 1);
+  return (
+    <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-base font-semibold tracking-tight">{title}</h3>
+        <span className="text-xs text-slate-500">{subtitle}</span>
+      </div>
+      {trails.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">No traffic in this window.</p>
+      ) : (
+        <ol className="mt-3 space-y-2.5">
+          {trails.map((t, i) => (
+            <li key={t.ussd_string} className="flex items-center gap-3">
+              <span className="w-4 shrink-0 text-right text-xs tabular-nums text-slate-400">{i + 1}</span>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <code className="truncate text-sm text-slate-700 dark:text-slate-200" title={t.ussd_string}>
+                    {t.ussd_string}
+                  </code>
+                  <span className="shrink-0 font-mono text-xs tabular-nums text-slate-500">
+                    {t.n.toLocaleString()}
+                  </span>
+                </div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                  <div className="h-full rounded-full bg-onfon-red/70" style={{ width: `${(t.n / max) * 100}%` }} />
+                </div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function TrailsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {[0, 1].map((c) => (
+        <div key={c} className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm">
+          <div className="flex items-baseline justify-between">
+            <div className="h-5 w-44 rounded bg-slate-200 dark:bg-slate-800 animate-pulse" />
+            <div className="h-3 w-20 rounded bg-slate-100 dark:bg-slate-800/60 animate-pulse" />
+          </div>
+          <div className="mt-3 space-y-2.5">
+            {Array.from({ length: 6 }).map((_, j) => (
+              <div key={j} className="flex items-center gap-3">
+                <div className="h-3 w-3 rounded bg-slate-100 dark:bg-slate-800/60 animate-pulse" />
+                <div className="flex-1">
+                  <div className="h-3.5 w-1/2 rounded bg-slate-200 dark:bg-slate-800 animate-pulse" />
+                  <div className="mt-1 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800/60 animate-pulse" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Async — suspends while the (cached) GROUP BY queries run, so the section
+// STREAMS in after the rest of the page has painted instead of blocking it.
+async function TrailsSection({
+  shortcodeIds, daily,
+}: {
+  shortcodeIds: number[] | null;
+  daily: DailyTrafficRow[];
+}) {
+  // Busiest day of the selected month (by billable units, matching the chart).
+  // `r.day` is the full 'YYYY-MM-DD' date (see buildMonthGrid lookup).
+  const dayTotals: Record<string, number> = {};
+  for (const r of daily) dayTotals[r.day] = (dayTotals[r.day] ?? 0) + r.billable_units;
+  let peakDate: string | null = null;
+  let peakVal = -1;
+  for (const [d, v] of Object.entries(dayTotals)) {
+    if (v > peakVal) { peakVal = v; peakDate = d; }
+  }
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const peakIsPast = peakDate !== null && peakDate < todayStr;
+
+  const [peakTrails, todayTrails] = await Promise.all([
+    peakDate
+      ? topTrailsCached(shortcodeIds, { kind: "day", date: peakDate }, peakIsPast ? 86400 : 300)
+      : Promise.resolve([] as TrailRow[]),
+    topTrailsCached(shortcodeIds, { kind: "today" }, 300),
+  ]);
+  const peakLabel = peakDate
+    ? new Date(peakDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    : "—";
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <TrailList
+        title="Top USSD trails · peak day"
+        subtitle={peakDate ? `${peakLabel} · ${peakVal.toLocaleString()} units` : "no data"}
+        trails={peakTrails}
+      />
+      <TrailList
+        title="Top USSD trails · last 24h"
+        subtitle="rolling 24-hour window"
+        trails={todayTrails}
+      />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------
 //  Page
 // ---------------------------------------------------------------------
@@ -399,6 +566,10 @@ export default async function Home({
           <TrafficBarChart rows={daily} monthYM={month} />
         </div>
       </div>
+
+      <Suspense fallback={<TrailsSkeleton />}>
+        <TrailsSection shortcodeIds={session.shortcodeIds} daily={daily} />
+      </Suspense>
 
       <div>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-500">
