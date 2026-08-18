@@ -39,6 +39,7 @@ export interface SimShortcode {
   operator_name: string;
   code: string;
   label: string | null;
+  environment: string;      // 'sandbox' | 'production'
   handler_url: string;
   auth_mode: string;        // 'none' | 'bearer'
   status: string;           // 'active' | 'maintenance' | 'deactivated'
@@ -77,7 +78,7 @@ export async function loadSimulatableShortcodes(
   const where = allowedIds === null ? "" : "WHERE s.id = ANY($1::int[])";
   const params = allowedIds === null ? [] : [allowedIds];
   const r = await query<SimShortcode>(
-    `SELECT s.id, o.name AS operator_name, s.code, s.label,
+    `SELECT s.id, o.name AS operator_name, s.code, s.label, s.environment,
             s.handler_url, s.auth_mode, s.status, s.timeout_secs,
             (s.bearer_token IS NOT NULL AND s.bearer_token <> '') AS has_token
        FROM shortcodes s

@@ -18,8 +18,10 @@ import { headers } from "next/headers";
 import { getSession, hasPerm } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
 import {
-  codeExists, createShortcode, setShortcodeActive, setShortcodeHandlerUrl,
-  setShortcodeStatus, updateShortcode, type ShortcodeStatus, type ShortcodeWrite,
+  codeExists, createShortcode, getShortcode, promoteShortcode,
+  setShortcodeActive, setShortcodeHandlerUrl,
+  setShortcodeStatus, updateShortcode,
+  type ShortcodeEnvironment, type ShortcodeStatus, type ShortcodeWrite,
 } from "@/lib/shortcodes";
 import { audit, clientIp } from "@/lib/audit";
 
@@ -57,6 +59,9 @@ function parseWrite(fd: FormData): { write?: ShortcodeWrite; error?: string } {
   const operator_id   = intField(fd, "operator_id");
   const code          = strField(fd, "code");
   const label         = strField(fd, "label") || null;
+  // Environment: only sandbox/production; default production (SA form).
+  const environment: ShortcodeEnvironment =
+    strField(fd, "environment").toLowerCase() === "sandbox" ? "sandbox" : "production";
   const owner_user_id = intField(fd, "owner_user_id");
   const handler_url   = strField(fd, "handler_url");
   const auth_mode     = strField(fd, "auth_mode") as "none" | "bearer";
@@ -94,7 +99,7 @@ function parseWrite(fd: FormData): { write?: ShortcodeWrite; error?: string } {
 
   return {
     write: {
-      operator_id, code, label, owner_user_id, handler_url,
+      operator_id, code, label, environment, owner_user_id, handler_url,
       auth_mode,
       bearer_token: auth_mode === "bearer" ? bearer_token : null,
       timeout_secs,
@@ -111,8 +116,8 @@ export async function actionCreateShortcode(fd: FormData) {
   if (error || !write) {
     return redirect(`/shortcodes/new?error=${encodeURIComponent(error || "invalid input")}`);
   }
-  if (await codeExists(write.operator_id, write.code)) {
-    return redirect(`/shortcodes/new?error=${encodeURIComponent("operator+code already exists")}`);
+  if (await codeExists(write.operator_id, write.code, write.environment)) {
+    return redirect(`/shortcodes/new?error=${encodeURIComponent("operator+code already exists in this environment")}`);
   }
   const id = await createShortcode(write, Number(session.sub));
   const meta = await reqMeta();
@@ -131,8 +136,8 @@ export async function actionUpdateShortcode(id: number, fd: FormData) {
   if (error || !write) {
     return redirect(`/shortcodes/${id}?error=${encodeURIComponent(error || "invalid input")}`);
   }
-  if (await codeExists(write.operator_id, write.code, id)) {
-    return redirect(`/shortcodes/${id}?error=${encodeURIComponent("operator+code already exists")}`);
+  if (await codeExists(write.operator_id, write.code, write.environment, id)) {
+    return redirect(`/shortcodes/${id}?error=${encodeURIComponent("operator+code already exists in this environment")}`);
   }
   await updateShortcode(id, write, Number(session.sub));
   const meta = await reqMeta();
@@ -144,6 +149,37 @@ export async function actionUpdateShortcode(id: number, fd: FormData) {
   revalidatePath("/shortcodes");
   revalidatePath(`/shortcodes/${id}`);
   redirect("/shortcodes");
+}
+
+/**
+ * Promote a sandbox shortcode to production (super_admin only). Clones the
+ * sandbox row into a new production row — the sandbox copy stays alive for
+ * continued testing. Blocked when a production (operator, code) already
+ * exists, so promotion can never silently overwrite live routing.
+ */
+export async function actionPromoteShortcode(id: number) {
+  const session = await requireAdmin();
+  const sc = await getShortcode(id);
+  if (!sc) {
+    return redirect(`/shortcodes?error=${encodeURIComponent("shortcode not found")}`);
+  }
+  if (sc.environment !== "sandbox") {
+    return redirect(`/shortcodes/${id}?error=${encodeURIComponent("only sandbox shortcodes can be promoted")}`);
+  }
+  if (await codeExists(sc.operator_id, sc.code, "production")) {
+    return redirect(`/shortcodes/${id}?error=${encodeURIComponent("a production shortcode with this operator+code already exists")}`);
+  }
+  const newId = await promoteShortcode(id, Number(session.sub));
+  const meta = await reqMeta();
+  await audit({
+    actor: session.email, action: "shortcode.promote",
+    target: `${sc.operator_id}:${sc.code}`, outcome: "success",
+    ip: meta.ip, userAgent: meta.ua,
+    detail: { sandbox_id: id, production_id: newId, handler_url: sc.handler_url },
+  });
+  revalidatePath("/shortcodes");
+  revalidatePath(`/shortcodes/${id}`);
+  redirect(`/shortcodes/${newId}`);
 }
 
 export async function actionSetShortcodeActive(id: number, active: boolean) {

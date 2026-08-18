@@ -103,6 +103,7 @@ export default function Simulator({ shortcodes }: { shortcodes: SimShortcode[] }
             {shortcodes.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.operator_name} · {s.code}{s.label ? ` (${s.label})` : ""}
+                {s.environment === "sandbox" ? " — sandbox" : ""}
               </option>
             ))}
           </select>

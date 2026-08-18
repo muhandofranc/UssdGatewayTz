@@ -21,15 +21,16 @@ import { getSession, hasPerm } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
 import {
   listOperators, listShortcodes,
-  type ShortcodeListFilters, type ShortcodeStatus,
+  type ShortcodeEnvironment, type ShortcodeListFilters, type ShortcodeStatus,
 } from "@/lib/shortcodes";
 import { listShortcodeOwners } from "@/lib/summary";
-import { actionSetShortcodeActive } from "./actions";
+import { actionSetShortcodeActive, actionPromoteShortcode } from "./actions";
 
 type SearchParams = {
   operator_id?: string | string[];
   status?: string;
   auth_mode?: string;
+  environment?: string;
   owner_user_id?: string;
   q?: string;
 };
@@ -57,6 +58,8 @@ export default async function ShortcodesPage({
                          ? (sp.status as ShortcodeStatus) : undefined;
   const authMode     = sp.auth_mode === "none" || sp.auth_mode === "bearer"
                          ? sp.auth_mode : undefined;
+  const environment  = sp.environment === "sandbox" || sp.environment === "production"
+                         ? (sp.environment as ShortcodeEnvironment) : undefined;
   const ownerUserId  = sp.owner_user_id ? parseInt(sp.owner_user_id, 10) : undefined;
   const search       = sp.q?.trim() || undefined;
 
@@ -64,6 +67,7 @@ export default async function ShortcodesPage({
     operatorIds:  operatorIds.length ? operatorIds : undefined,
     status,
     authMode,
+    environment,
     ownerUserId:  Number.isFinite(ownerUserId) ? ownerUserId : undefined,
     search,
   };
@@ -74,7 +78,7 @@ export default async function ShortcodesPage({
     listShortcodeOwners(),
   ]);
 
-  const anyFilterActive = !!(operatorIds.length || status || authMode || ownerUserId || search);
+  const anyFilterActive = !!(operatorIds.length || status || authMode || environment || ownerUserId || search);
 
   return (
     <div className="space-y-4">
@@ -136,6 +140,16 @@ export default async function ShortcodesPage({
         </label>
 
         <label className="block">
+          <span className="block text-xs font-medium mb-1">Environment</span>
+          <select name="environment" defaultValue={environment ?? ""}
+                  className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-sm">
+            <option value="">any</option>
+            <option value="production">production</option>
+            <option value="sandbox">sandbox</option>
+          </select>
+        </label>
+
+        <label className="block">
           <span className="block text-xs font-medium mb-1">Owner</span>
           <select name="owner_user_id" defaultValue={ownerUserId ? String(ownerUserId) : ""}
                   className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-2 py-1.5 text-sm">
@@ -169,6 +183,7 @@ export default async function ShortcodesPage({
             <tr>
               <th className="px-2 py-2 text-xs font-medium">MNO</th>
               <th className="px-2 py-2 text-xs font-medium">Code</th>
+              <th className="px-2 py-2 text-xs font-medium">Env</th>
               <th className="px-2 py-2 text-xs font-medium">Label</th>
               <th className="px-2 py-2 text-xs font-medium">Owner</th>
               <th className="px-2 py-2 text-xs font-medium">Handler URL</th>
@@ -183,6 +198,13 @@ export default async function ShortcodesPage({
               <tr key={r.id} className="border-t border-slate-200 dark:border-slate-800">
                 <td className="px-2 py-1.5 text-xs font-mono">{r.operator_name}</td>
                 <td className="px-2 py-1.5 text-xs font-mono">{r.code}</td>
+                <td className="px-2 py-1.5 text-xs">
+                  {r.environment === "sandbox" ? (
+                    <span className="inline-flex items-center rounded-md bg-violet-50 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 px-1.5 py-0.5">sandbox</span>
+                  ) : (
+                    <span className="inline-flex items-center rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-1.5 py-0.5">prod</span>
+                  )}
+                </td>
                 <td className="px-2 py-1.5 text-xs">{r.label ?? "—"}</td>
                 <td className="px-2 py-1.5 text-xs">
                   <span title={r.owner_email} className="font-mono">{r.owner_name}</span>
@@ -213,6 +235,17 @@ export default async function ShortcodesPage({
                 {canManage ? (
                   <td className="px-2 py-1.5 text-xs text-right space-x-2">
                     <Link href={`/shortcodes/${r.id}`} className="underline">Edit</Link>
+                    {r.environment === "sandbox" ? (
+                      <form action={async () => {
+                        "use server";
+                        await actionPromoteShortcode(r.id);
+                      }} className="inline">
+                        <button className="underline text-violet-700 dark:text-violet-300"
+                                title="Clone this sandbox shortcode into a new production shortcode">
+                          Promote
+                        </button>
+                      </form>
+                    ) : null}
                     <form action={async () => {
                       "use server";
                       await actionSetShortcodeActive(r.id, r.status !== "active");
@@ -226,7 +259,7 @@ export default async function ShortcodesPage({
               </tr>
             ))}
             {rows.length === 0 ? (
-              <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={canManage ? 9 : 8}>
+              <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={canManage ? 10 : 9}>
                 {anyFilterActive
                   ? "No shortcodes match the current filters."
                   : canManage

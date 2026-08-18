@@ -56,6 +56,40 @@ export default function ShortcodeFormFields({ operators, owners, defaults }: Pro
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Environment</span>
+          {d.id ? (
+            // Editing: environment is immutable here — moving sandbox →
+            // production is the dedicated Promote action (which clones), so
+            // an edit can never silently retarget live routing. Value still
+            // submitted (hidden) so the uniqueness check uses the right env.
+            <>
+              <input type="hidden" name="environment" value={d.environment ?? "production"} />
+              <div className="rounded-md border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-2 py-1.5 text-slate-600 dark:text-slate-300">
+                {d.environment ?? "production"}
+              </div>
+              <span className="text-xs text-slate-500">
+                Immutable here — use <strong>Promote</strong> to move a sandbox
+                shortcode to production.
+              </span>
+            </>
+          ) : (
+            <>
+              <select
+                name="environment" defaultValue={d.environment ?? "production"}
+                className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5"
+              >
+                <option value="production">production — routable by the gateway</option>
+                <option value="sandbox">sandbox — simulator only, never live traffic</option>
+              </select>
+              <span className="text-xs text-slate-500">
+                Sandbox shortcodes are testable only via the simulator; promote to
+                production when ready. The same code may exist in both.
+              </span>
+            </>
+          )}
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Owner</span>
           <select
             name="owner_user_id" required defaultValue={d.owner_user_id ?? ""}

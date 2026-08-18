@@ -29,6 +29,7 @@ export const Perms = {
   REPORTS_VIEW_ALL:    "reports.view_all",
   SHORTCODES_VIEW:     "shortcodes.view",
   SHORTCODES_MANAGE:   "shortcodes.manage",
+  SHORTCODES_MANAGE_SANDBOX: "shortcodes.manage_sandbox",
   OPERATORS_VIEW:      "operators.view",
   PORTAL_USERS_VIEW:   "portal_users.view",
   PORTAL_USERS_MANAGE: "portal_users.manage",

@@ -10,9 +10,14 @@
  */
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/auth";
-import { listShortcodesOwnedBy, type ShortcodeRow } from "@/lib/shortcodes";
+import { getSession, hasPerm } from "@/lib/auth";
+import { Perms } from "@/lib/rbac";
+import {
+  listOperators, listShortcodesOwnedBy,
+  type OperatorOption, type ShortcodeRow,
+} from "@/lib/shortcodes";
 import { actionSetShortcodeStatus, actionSetShortcodeHandlerUrl } from "../shortcodes/actions";
+import { actionCreateSandboxShortcode } from "./actions";
 
 export default async function MyShortcodesPage({
   searchParams,
@@ -23,7 +28,11 @@ export default async function MyShortcodesPage({
   if (!session) redirect("/login");
   const sp = await searchParams;
 
-  const rows = await listShortcodesOwnedBy(Number(session.sub));
+  const canCreateSandbox = hasPerm(session, Perms.SHORTCODES_MANAGE_SANDBOX);
+  const [rows, operators] = await Promise.all([
+    listShortcodesOwnedBy(Number(session.sub)),
+    canCreateSandbox ? listOperators() : Promise.resolve([] as OperatorOption[]),
+  ]);
 
   return (
     <div className="space-y-4">
@@ -45,10 +54,13 @@ export default async function MyShortcodesPage({
         </div>
       ) : null}
 
+      {canCreateSandbox ? <CreateSandboxForm operators={operators} /> : null}
+
       {rows.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 text-center text-sm text-slate-500">
-          You don&rsquo;t own any shortcodes yet. Ask a Super Admin to set you as
-          the owner of one via the <Link href="/" className="underline">main dashboard</Link>.
+          {canCreateSandbox
+            ? <>You don&rsquo;t own any shortcodes yet. Create a <strong>sandbox</strong> one above to start testing, or ask a Super Admin to assign you a production shortcode.</>
+            : <>You don&rsquo;t own any shortcodes yet. Ask a Super Admin to set you as the owner of one via the <Link href="/" className="underline">main dashboard</Link>.</>}
         </div>
       ) : (
         <div className="space-y-3">
@@ -64,6 +76,70 @@ export default async function MyShortcodesPage({
         a shortcode entirely.
       </p>
     </div>
+  );
+}
+
+function CreateSandboxForm({ operators }: { operators: OperatorOption[] }) {
+  return (
+    <details className="rounded-2xl border border-violet-200 dark:border-violet-900/50 bg-violet-50/50 dark:bg-violet-950/20 p-4">
+      <summary className="cursor-pointer text-sm font-medium text-violet-800 dark:text-violet-200">
+        + Create a sandbox shortcode
+      </summary>
+      <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">
+        Sandbox shortcodes never receive live MNO traffic — you test them in the{" "}
+        <Link href="/simulator" className="underline">simulator</Link>. When they
+        work, ask a Super Admin to promote to production.
+      </p>
+      <form action={actionCreateSandboxShortcode} className="mt-3 grid gap-3 md:grid-cols-2">
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Operator</span>
+          <select name="operator_id" required defaultValue=""
+                  className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5">
+            <option value="" disabled>Choose…</option>
+            {operators.map((o) => <option key={o.id} value={o.id}>{o.display_name}</option>)}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Code</span>
+          <input type="text" name="code" required maxLength={32} placeholder="*123#  or  glpair"
+                 className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-mono" />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Label</span>
+          <input type="text" name="label" maxLength={120} placeholder="Friendly name (optional)"
+                 className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5" />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Handler timeout (seconds)</span>
+          <input type="number" name="timeout_secs" min={1} max={30} required defaultValue={5}
+                 className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5" />
+        </label>
+        <label className="flex flex-col gap-1 text-sm md:col-span-2">
+          <span className="font-medium">Handler URL</span>
+          <input type="url" name="handler_url" required placeholder="https://your-handler.example/ussd"
+                 className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-mono" />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Auth mode</span>
+          <select name="auth_mode" defaultValue="none"
+                  className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5">
+            <option value="none">none (open — internal / VPN)</option>
+            <option value="bearer">bearer (Authorization: Bearer …)</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Bearer token</span>
+          <input type="text" name="bearer_token" placeholder="Required when auth_mode=bearer"
+                 className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-mono" />
+        </label>
+        <div className="md:col-span-2">
+          <button type="submit"
+                  className="rounded-md bg-violet-700 hover:bg-violet-800 text-white px-3 py-1.5 text-sm font-medium">
+            Create sandbox shortcode
+          </button>
+        </div>
+      </form>
+    </details>
   );
 }
 
@@ -103,8 +179,11 @@ function OwnerCard({ row: r }: { row: ShortcodeRow }) {
     <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <div className="font-mono text-sm">
-            <span className="text-slate-500">{r.operator_name}</span> · {r.code}
+          <div className="font-mono text-sm flex items-center gap-2">
+            <span><span className="text-slate-500">{r.operator_name}</span> · {r.code}</span>
+            {r.environment === "sandbox" ? (
+              <span className="inline-flex items-center rounded-md bg-violet-50 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 px-1.5 py-0.5 text-[10px] font-sans">sandbox</span>
+            ) : null}
           </div>
           {r.label ? (
             <div className="text-xs text-slate-500">{r.label}</div>

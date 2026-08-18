@@ -111,6 +111,10 @@ def resolve_shortcode(operator_name: str, code: str) -> Optional[ShortcodeRow]:
     can render the owner-authored message instead of the generic
     'Service not configured'.
     """
+    # environment = 'production' is the hard isolation guarantee: sandbox
+    # shortcodes are testable ONLY via the portal simulator and must never
+    # resolve for live MNO traffic, even when they share (operator, code)
+    # with a production shortcode (migration 024).
     sql = """
         SELECT s.id, s.operator_id, o.name AS operator_name,
                s.code, s.owner_user_id, s.handler_url,
@@ -119,6 +123,7 @@ def resolve_shortcode(operator_name: str, code: str) -> Optional[ShortcodeRow]:
           FROM shortcodes s
           JOIN operators  o ON o.id = s.operator_id
          WHERE o.name = %s AND s.code = %s
+           AND s.environment = 'production'
          LIMIT 1
     """
     with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -187,6 +192,7 @@ def lookup_shortcode_by_dial_prefix(
             "SELECT code FROM shortcodes "
             " WHERE operator_id = %s "
             "   AND code = ANY(%s::text[]) "
+            "   AND environment = 'production' "  # sandbox rows never route (024)
             " ORDER BY length(code) DESC "
             " LIMIT 1",
             (operator_id, candidates),

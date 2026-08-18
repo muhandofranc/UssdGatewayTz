@@ -14,12 +14,18 @@ import { query } from "./db";
 
 export type ShortcodeStatus = "active" | "maintenance" | "deactivated";
 
+// 'sandbox' shortcodes are testable ONLY via the simulator — the gateway
+// resolver filters them out (migration 024, app/db.py). 'production' is
+// the routable environment.
+export type ShortcodeEnvironment = "sandbox" | "production";
+
 export interface ShortcodeRow {
   id: number;
   operator_id: number;
   operator_name: string;
   code: string;
   label: string | null;
+  environment: ShortcodeEnvironment;
   owner_user_id: number;
   owner_email: string;
   owner_name: string;
@@ -47,7 +53,7 @@ export interface OperatorOption {
 // all return the identical column shape so callers can share table components.
 const SHORTCODE_SELECT = `
     SELECT s.id, s.operator_id, o.name AS operator_name,
-           s.code, s.label, s.owner_user_id,
+           s.code, s.label, s.environment, s.owner_user_id,
            u.email AS owner_email, u.name AS owner_name,
            s.handler_url, s.auth_mode, s.bearer_token,
            s.timeout_secs, s.active,
@@ -69,6 +75,8 @@ export interface ShortcodeListFilters {
   status?: ShortcodeStatus;
   /** 'none' | 'bearer' exact match. */
   authMode?: "none" | "bearer";
+  /** 'sandbox' | 'production' exact match. */
+  environment?: ShortcodeEnvironment;
   /** portal_users.id exact match — typically only used by callers
    *  with reports.view_all (the page hides the dropdown otherwise). */
   ownerUserId?: number;
@@ -92,6 +100,9 @@ export async function listShortcodes(
   }
   if (f.authMode) {
     conds.push(`s.auth_mode = ${next(f.authMode)}`);
+  }
+  if (f.environment) {
+    conds.push(`s.environment = ${next(f.environment)}`);
   }
   if (f.ownerUserId !== undefined && Number.isFinite(f.ownerUserId)) {
     conds.push(`s.owner_user_id = ${next(f.ownerUserId)}`);
@@ -154,6 +165,7 @@ export interface ShortcodeWrite {
   operator_id: number;
   code: string;
   label: string | null;
+  environment: ShortcodeEnvironment;
   owner_user_id: number;
   handler_url: string;
   auth_mode: "none" | "bearer";
@@ -170,17 +182,45 @@ export async function createShortcode(
   const active = w.status === "active";
   const r = await query<{ id: number }>(
     `INSERT INTO shortcodes
-       (operator_id, code, label, owner_user_id, handler_url,
+       (operator_id, code, label, environment, owner_user_id, handler_url,
         auth_mode, bearer_token, timeout_secs, active,
         status, status_message, status_set_by_id, status_set_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-             $10, $11, $12, now())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+             $11, $12, $13, now())
      RETURNING id`,
-    [w.operator_id, w.code, w.label, w.owner_user_id, w.handler_url,
+    [w.operator_id, w.code, w.label, w.environment, w.owner_user_id, w.handler_url,
      w.auth_mode, w.bearer_token, w.timeout_secs, active,
      w.status, w.status_message, byUserId],
   );
   return r.rows[0]!.id;
+}
+
+/**
+ * Promote a SANDBOX shortcode to PRODUCTION by cloning it into a new
+ * production row (the sandbox copy is left intact so testers keep
+ * iterating). Caller MUST be super_admin and MUST have verified there is
+ * no existing production (operator_id, code) — see actionPromoteShortcode.
+ * Returns the new production row's id.
+ */
+export async function promoteShortcode(
+  sandboxId: number, byUserId: number,
+): Promise<number> {
+  const r = await query<{ id: number }>(
+    `INSERT INTO shortcodes
+       (operator_id, code, label, environment, owner_user_id, handler_url,
+        auth_mode, bearer_token, timeout_secs, active,
+        status, status_message, status_set_by_id, status_set_at)
+     SELECT operator_id, code, label, 'production', owner_user_id, handler_url,
+            auth_mode, bearer_token, timeout_secs, TRUE,
+            'active', NULL, $2, now()
+       FROM shortcodes
+      WHERE id = $1 AND environment = 'sandbox'
+     RETURNING id`,
+    [sandboxId, byUserId],
+  );
+  const id = r.rows[0]?.id;
+  if (!id) throw new Error("promote failed: shortcode not found or not sandbox");
+  return id;
 }
 
 export async function updateShortcode(
@@ -254,15 +294,20 @@ export async function setShortcodeActive(
   await setShortcodeStatus(id, active ? "active" : "deactivated", null, byUserId);
 }
 
-/** Returns true if (operator_id, code) already exists for another row. */
+/**
+ * Returns true if (operator_id, code, environment) already exists for
+ * another row. Uniqueness is per-environment (migration 024), so the same
+ * code may live in both sandbox and production simultaneously.
+ */
 export async function codeExists(
-  operatorId: number, code: string, excludeId?: number,
+  operatorId: number, code: string, environment: ShortcodeEnvironment,
+  excludeId?: number,
 ): Promise<boolean> {
   const r = await query<{ id: number }>(
     excludeId
-      ? `SELECT id FROM shortcodes WHERE operator_id = $1 AND code = $2 AND id <> $3 LIMIT 1`
-      : `SELECT id FROM shortcodes WHERE operator_id = $1 AND code = $2 LIMIT 1`,
-    excludeId ? [operatorId, code, excludeId] : [operatorId, code],
+      ? `SELECT id FROM shortcodes WHERE operator_id = $1 AND code = $2 AND environment = $3 AND id <> $4 LIMIT 1`
+      : `SELECT id FROM shortcodes WHERE operator_id = $1 AND code = $2 AND environment = $3 LIMIT 1`,
+    excludeId ? [operatorId, code, environment, excludeId] : [operatorId, code, environment],
   );
   return r.rows.length > 0;
 }
