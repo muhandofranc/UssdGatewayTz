@@ -18,7 +18,10 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { getSession, hasPerm } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
-import { codeExists, createShortcode } from "@/lib/shortcodes";
+import {
+  codeExists, countUnpromotedSandbox, createShortcode,
+  SANDBOX_PER_OPERATOR_LIMIT,
+} from "@/lib/shortcodes";
 import { audit, clientIp } from "@/lib/audit";
 
 const back = (msg: string, kind: "error" | "ok" = "error") =>
@@ -48,6 +51,16 @@ export async function actionCreateSandboxShortcode(fd: FormData) {
   if (auth_mode === "bearer" && !bearer_token)           return back("bearer token required when auth_mode=bearer");
   if (!Number.isFinite(timeout_secs) || timeout_secs < 1 || timeout_secs > 30) {
     return back("timeout must be 1–30 seconds");
+  }
+
+  // Anti-abuse cap: at most N un-promoted sandbox shortcodes per operator.
+  // Promoting one (a production sibling then exists) frees a slot.
+  const inFlight = await countUnpromotedSandbox(Number(session.sub), operator_id);
+  if (inFlight >= SANDBOX_PER_OPERATOR_LIMIT) {
+    return back(
+      `You already have ${SANDBOX_PER_OPERATOR_LIMIT} sandbox shortcodes for this operator ` +
+      `awaiting promotion. Promote one to production before creating another.`,
+    );
   }
 
   // Uniqueness is per-environment: a client may reuse a code that already

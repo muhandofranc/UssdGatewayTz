@@ -556,8 +556,7 @@ export default async function Home({
             <h2 className="text-lg font-semibold tracking-tight">Daily traffic by network</h2>
             <p className="text-xs text-slate-500">
               Session counts per day, by MNO — sums each operator&rsquo;s
-              billable units (CEIL(duration / billing window); 1 unit
-              per session for per-leg MNOs). Day boundaries in Africa/Nairobi.
+              billable units
             </p>
           </div>
           <MonthFilter current={month} />
@@ -573,7 +572,7 @@ export default async function Home({
 
       <div>
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-500">
-          Jump to
+          Navigate to
         </h2>
         <QuickLinks />
       </div>

@@ -88,7 +88,8 @@ function CreateSandboxForm({ operators }: { operators: OperatorOption[] }) {
       <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">
         Sandbox shortcodes never receive live MNO traffic — you test them in the{" "}
         <Link href="/simulator" className="underline">simulator</Link>. When they
-        work, ask a Super Admin to promote to production.
+        work, ask a Super Admin to promote to production. Limit: 2 un-promoted
+        sandbox shortcodes per operator — promote one to free a slot.
       </p>
       <form action={actionCreateSandboxShortcode} className="mt-3 grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">

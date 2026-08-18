@@ -295,6 +295,38 @@ export async function setShortcodeActive(
 }
 
 /**
+ * Max sandbox shortcodes a self-service user may hold PER OPERATOR that have
+ * not yet been promoted. Anti-abuse cap on the /my-shortcodes create path.
+ */
+export const SANDBOX_PER_OPERATOR_LIMIT = 2;
+
+/**
+ * Count a user's sandbox shortcodes for one operator that have NOT yet been
+ * promoted — i.e. no production shortcode exists with the same
+ * (operator_id, code). A promoted sandbox (its production sibling exists)
+ * no longer counts, so promoting one frees a slot for a new sandbox while
+ * the sandbox copy stays alive for continued testing.
+ */
+export async function countUnpromotedSandbox(
+  ownerUserId: number, operatorId: number,
+): Promise<number> {
+  const r = await query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n
+       FROM shortcodes s
+      WHERE s.owner_user_id = $1
+        AND s.operator_id   = $2
+        AND s.environment   = 'sandbox'
+        AND NOT EXISTS (
+              SELECT 1 FROM shortcodes p
+               WHERE p.operator_id = s.operator_id
+                 AND p.code        = s.code
+                 AND p.environment = 'production')`,
+    [ownerUserId, operatorId],
+  );
+  return Number(r.rows[0]?.n ?? 0);
+}
+
+/**
  * Returns true if (operator_id, code, environment) already exists for
  * another row. Uniqueness is per-environment (migration 024), so the same
  * code may live in both sandbox and production simultaneously.
