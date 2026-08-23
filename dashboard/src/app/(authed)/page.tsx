@@ -142,17 +142,32 @@ const TONE_ICON: Record<Tone, string> = {
   rose:    "bg-rose-50 text-rose-600 dark:bg-rose-950/50 dark:text-rose-400",
 };
 
+/**
+ * Stat tile. Pass `href` to turn the whole card into a drill-down
+ * link — it then grows a chevron in the header and a focus ring, so
+ * the affordance is visible to mouse AND keyboard users. Without
+ * `href` it renders as an inert <div> exactly as before.
+ */
 function Tile({
-  label, value, hint, icon, tone = "slate",
+  label, value, hint, icon, tone = "slate", href, hrefTitle,
 }: {
   label: string;
   value: string | number;
   hint?: ReactNode;
   icon: ReactNode;
   tone?: Tone;
+  href?: string;
+  hrefTitle?: string;
 }) {
-  return (
-    <div className="group rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm transition-all duration-200 hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700">
+  const shell = [
+    "group rounded-2xl border border-slate-200 dark:border-slate-800",
+    "bg-white dark:bg-slate-900 p-5 shadow-sm transition-all duration-200",
+    "hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700",
+    href ? "block cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-onfon-red/60 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-950" : "",
+  ].join(" ");
+
+  const body = (
+    <>
       <div className="flex items-center gap-3">
         <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${TONE_ICON[tone]}`}>
           {icon}
@@ -160,11 +175,25 @@ function Tile({
         <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
           {label}
         </div>
+        {href ? (
+          <span
+            aria-hidden="true"
+            className="ml-auto text-slate-300 dark:text-slate-600 transition-all duration-200 group-hover:translate-x-0.5 group-hover:text-slate-500 dark:group-hover:text-slate-400"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                 strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+              <path d="m9 6 6 6-6 6" />
+            </svg>
+          </span>
+        ) : null}
       </div>
       <div className="mt-3 text-3xl font-semibold tabular-nums tracking-tight">{value}</div>
       <div className="mt-1 min-h-[1rem] text-xs text-slate-500">{hint}</div>
-    </div>
+    </>
   );
+
+  if (!href) return <div className={shell}>{body}</div>;
+  return <Link href={href} title={hrefTitle} className={shell}>{body}</Link>;
 }
 
 interface DayCell {
@@ -508,6 +537,14 @@ export default async function Home({
   const errRate = legs24 > 0 ? (err24 / legs24) * 100 : 0;
   const legsPerSession = sessions24 > 0 ? legs24 / sessions24 : 0;
 
+  // Drill-down target for the Errors tile: /sessions pre-filtered to
+  // "Errors only" over the same rolling day. `from` deliberately uses
+  // the SAME yyyy-mm-dd shape FilterBar's "24h" quick-pick emits, so
+  // that pill renders highlighted on arrival rather than the range
+  // reading as a custom one (see _filterBar.tsx quickPickHref).
+  const errFrom = new Date(Date.now() - 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const errHref = `/sessions?error_class=error&from=${errFrom}`;
+
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-4 flex-wrap">
@@ -545,6 +582,11 @@ export default async function Home({
         />
         <Tile
           label="Errors · 24h" tone={err24 > 0 ? "rose" : "emerald"} icon={IconAlert}
+          // Only a drill-down when there is something to drill into —
+          // a zero tile stays inert rather than inviting a click into
+          // an empty result set.
+          href={err24 > 0 ? errHref : undefined}
+          hrefTitle="View the failing sessions from the last 24h"
           value={err24.toLocaleString()}
           hint={<><span className={`font-mono tabular-nums ${err24 > 0 ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400"}`}>{errRate.toFixed(1)}%</span> error rate</>}
         />

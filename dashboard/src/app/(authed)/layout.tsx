@@ -28,13 +28,13 @@ export default async function AuthedLayout({
   // (everyone with a session has at least reports.view_own).
   // Admin sections only for users that carry the matching perm.
   const items: NavItem[] = [
-    { href: "/",            label: "Overview" },                                  // exact "/" match
-    { href: "/summary",     label: "Reports Summary",     matchPrefix: "/summary"     },  // pre-aggregated daily rollup
-    { href: "/sessions",    label: "Sessions",    matchPrefix: "/sessions"    },  // per-session summary
-    { href: "/reports",     label: "Session Hops",        matchPrefix: "/reports"     },  // per-HTTP-leg detail
-    { href: "/exports",     label: "Download Exports",     matchPrefix: "/exports"     },  // queued CSV jobs
-    { href: "/integration", label: "Integration Document", matchPrefix: "/integration" },  // handler-URL contract docs
-    { href: "/simulator",   label: "Handler Simulator",    matchPrefix: "/simulator"   },  // test your handler URL live
+    { href: "/",            label: "Overview",             icon: "overview"     },  // exact "/" match
+    { href: "/summary",     label: "Reports Summary",      icon: "summary",     matchPrefix: "/summary"     },  // pre-aggregated daily rollup
+    { href: "/sessions",    label: "Sessions",             icon: "sessions",    matchPrefix: "/sessions"    },  // per-session summary
+    { href: "/reports",     label: "Session Hops",         icon: "hops",        matchPrefix: "/reports"     },  // per-HTTP-leg detail
+    { href: "/exports",     label: "Download Exports",     icon: "exports",     matchPrefix: "/exports"     },  // queued CSV jobs
+    { href: "/integration", label: "Integration Document", icon: "integration", matchPrefix: "/integration" },  // handler-URL contract docs
+    { href: "/simulator",   label: "Handler Simulator",    icon: "simulator",   matchPrefix: "/simulator"   },  // test your handler URL live
   ];
   // Shortcodes/Operators sidebar: show for super_admin (manage) AND
   // auditor (view-only). Client/Admin sees their slim "My shortcodes"
@@ -44,16 +44,16 @@ export default async function AuthedLayout({
   const canSeeOperatorsAdmin =
     hasPerm(session, Perms.SHORTCODES_MANAGE) || hasPerm(session, Perms.OPERATORS_VIEW);
   if (canSeeShortcodesAdmin) {
-    items.push({ href: "/shortcodes", label: "Shortcodes", matchPrefix: "/shortcodes" });
+    items.push({ href: "/shortcodes", label: "Shortcodes", icon: "shortcodes", matchPrefix: "/shortcodes" });
   }
   if (canSeeOperatorsAdmin) {
-    items.push({ href: "/operators",  label: "Operators",  matchPrefix: "/operators"  });
+    items.push({ href: "/operators",  label: "Operators",  icon: "operators",  matchPrefix: "/operators"  });
   }
   // "My shortcodes": only for the Admin/client (they own shortcodes
   // they can put into maintenance). Auditor sees the global list
   // instead; client_viewer doesn't own anything.
   if (!canSeeShortcodesAdmin && session.role === "client") {
-    items.push({ href: "/my-shortcodes", label: "My shortcodes", matchPrefix: "/my-shortcodes" });
+    items.push({ href: "/my-shortcodes", label: "My shortcodes", icon: "myShortcodes", matchPrefix: "/my-shortcodes" });
   }
   // Users sidebar: super_admin (manage), auditor (view), AND
   // client/Admin (viewers.manage_own — manages their own read-only
@@ -63,11 +63,11 @@ export default async function AuthedLayout({
     || hasPerm(session, Perms.PORTAL_USERS_VIEW)
     || hasPerm(session, Perms.VIEWERS_MANAGE_OWN)
   ) {
-    items.push({ href: "/users", label: "Portal users", matchPrefix: "/users" });
+    items.push({ href: "/users", label: "Portal users", icon: "users", matchPrefix: "/users" });
   }
   // Audit log — super_admin only (db/011).
   if (hasPerm(session, Perms.AUDIT_VIEW)) {
-    items.push({ href: "/audit", label: "Audit log", matchPrefix: "/audit" });
+    items.push({ href: "/audit", label: "Audit log", icon: "audit", matchPrefix: "/audit" });
   }
 
   // Up-to-2-letter avatar initials from the display name.
