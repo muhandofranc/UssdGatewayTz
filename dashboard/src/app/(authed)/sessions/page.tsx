@@ -21,6 +21,7 @@ import {
 import Filters from "../reports/Filters";
 import FilterBar, { defaultFromIfMissing } from "../_filterBar";
 import ExpandableSessionRow from "./ExpandableSessionRow";
+import { operatorColor } from "@/lib/operatorColors";
 
 interface PageProps {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -280,7 +281,15 @@ export default async function SessionsPage({ searchParams }: PageProps) {
           <div key={op.operator_name}
                className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2">
             <div className="flex items-baseline justify-between">
-              <div className="text-[10px] uppercase tracking-wider text-slate-500">{op.operator_name}</div>
+              {/* Swatch + tinted name, the same pairing the overview
+                  chart's legend uses, so one colour means one MNO across
+                  the whole dashboard. The figures below stay neutral —
+                  colour identifies the operator here, it does not encode
+                  anything about the numbers. */}
+              <div className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wider ${operatorColor(op.operator_name).text}`}>
+                <span className={`inline-block h-2 w-2 shrink-0 rounded-sm ${operatorColor(op.operator_name).fill}`} />
+                {op.operator_name}
+              </div>
               <div className="text-[10px] text-slate-500 font-mono">
                 {op.window_secs !== null ? `${op.window_secs}s` : "per-leg"}
               </div>

@@ -11,6 +11,8 @@
  *   portal_users.view      list/detail portal users (read-only)      [010]
  *   portal_users.manage    create/edit dashboard users
  *   archive.view           read the cold session-log archive         [028]
+ *   portal_users.impersonate  view the dashboard as another user,     [029]
+ *                          read-only; super_admin + auditor
  *   viewers.manage_own     Admin grants read-only viewers on OWN     [010]
  *                          shortcodes; data-level scope check in
  *                          users.ts enforces "own shortcodes only"
@@ -37,6 +39,7 @@ export const Perms = {
   VIEWERS_MANAGE_OWN:  "viewers.manage_own",
   AUDIT_VIEW:          "audit.view",
   ARCHIVE_VIEW:        "archive.view",
+  PORTAL_USERS_IMPERSONATE: "portal_users.impersonate",
 } as const;
 
 export type PermKey = (typeof Perms)[keyof typeof Perms];
@@ -55,6 +58,12 @@ export function requiredPermFor(pathname: string): PermKey[] | null {
   if (pathname === "/login") return null;
   if (pathname === "/api/auth/login") return null;
   if (pathname === "/api/auth/logout") return null; // logout is its own self-check
+  // The way OUT of an impersonated session must never be gated on the
+  // impersonated user's perms — that could strand an admin inside a
+  // session with no route back. The handler itself requires a session
+  // and an active `imp` claim. Checked before the /api/auth/impersonate
+  // prefix below, which it would otherwise match.
+  if (pathname === "/api/auth/impersonate/stop") return null;
   if (pathname === "/healthz") return null;
   if (pathname.startsWith("/_next/")) return null;
   if (pathname.startsWith("/favicon")) return null;
@@ -113,6 +122,11 @@ export function requiredPermFor(pathname: string): PermKey[] | null {
   // Audit log — super_admin only (granted via db/011).
   if (pathname.startsWith("/audit") || pathname.startsWith("/api/audit")) {
     return [Perms.AUDIT_VIEW];
+  }
+  // Starting an impersonation — super_admin + auditor (db/029). The
+  // route re-checks, and intersects perms so it can only narrow.
+  if (pathname === "/api/auth/impersonate") {
+    return [Perms.PORTAL_USERS_IMPERSONATE];
   }
   // Cold session-log archive — super_admin only (db/028). Deliberately
   // NOT reports.view_all: auditor holds that, and the archive is every

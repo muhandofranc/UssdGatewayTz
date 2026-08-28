@@ -27,6 +27,9 @@ const ALG = "HS256";
 const COOKIE_NAME =
   process.env.SESSION_COOKIE_NAME || "ussd_gw_dashboard_session";
 const TTL_SECONDS = Number(process.env.SESSION_TTL_SECONDS || 28_800); // 8h
+export const IMPERSONATION_TTL_SECONDS = Number(
+  process.env.SESSION_IMPERSONATION_TTL_SECONDS || 1_800,                // 30m
+);
 const COOKIE_INSECURE =
   process.env.SESSION_COOKIE_INSECURE === "1" &&
   process.env.NODE_ENV !== "production";
@@ -50,7 +53,16 @@ function secretBytes(): Uint8Array {
   return new TextEncoder().encode(raw);
 }
 
-export interface SessionClaims extends JWTPayload {
+/**
+ * The claim set we mint, before jose adds `iat`/`exp`.
+ *
+ * Kept separate from SessionClaims because that one extends jose's
+ * JWTPayload, whose `[k: string]: unknown` index signature makes
+ * `NewSessionClaims` widen every named property to
+ * `unknown` — silently turning `perms: string[]` into something you
+ * cannot call .filter() on.
+ */
+export interface NewSessionClaims {
   sub: string;             // portal_users.id as string
   email: string;
   name: string;
@@ -71,6 +83,95 @@ export interface SessionClaims extends JWTPayload {
    * login rather than being logged out.
    */
   shortcodeFrom?: Record<string, number>;
+  /**
+   * Present only while impersonating: WHO IS REALLY DRIVING. Every
+   * other claim above describes the impersonated user, so this is the
+   * identity that matters for accountability — the banner names it and
+   * the audit trail records it.
+   *
+   * Its presence is also the read-only signal: middleware refuses every
+   * non-GET request when this is set, so a write can never be
+   * attributed to someone who did not make it.
+   */
+  imp?: ImpersonationOrigin;
+}
+
+/**
+ * A verified session: the minted claims plus jose's registered ones.
+ * An intersection rather than `extends` because JWTPayload declares
+ * `sub?: string` while ours is always present — an interface may not
+ * extend two types that disagree on a property, but the intersection
+ * resolves it to the narrower `string`.
+ */
+export type SessionClaims = NewSessionClaims & JWTPayload;
+
+/** The real actor behind an impersonated session. */
+export interface ImpersonationOrigin {
+  sub: string;
+  email: string;
+  name: string;
+  role: string;
+}
+
+/**
+ * Claims for "actor views the dashboard as target".
+ *
+ * The rule that makes this safe: effective perms are the INTERSECTION
+ * of the actor's own perms and the target's, never the target's alone.
+ * Impersonating can only narrow what you may do. Without it an auditor
+ * — read-only by design — could impersonate a super_admin and acquire
+ * shortcodes.manage and archive.view, turning a support tool into a
+ * privilege-escalation path.
+ *
+ * The DATA scope, by contrast, is wholly the target's: their shortcode
+ * allowlist and its time floors. That is the entire point — to see what
+ * they see. It is never widening either, because only super_admin and
+ * auditor may impersonate and both are already unrestricted.
+ */
+/**
+ * Permissions that subsume others, for the intersection below only.
+ *
+ * A plain set-intersection is too blunt: an auditor holds
+ * `reports.view_all` and a client holds `reports.view_own`, which share
+ * no key, so intersecting them yields NOTHING and the auditor lands in
+ * an impersonated session that cannot render a single page. But someone
+ * cleared to read EVERY client's reports is plainly cleared to read one
+ * client's, so the broader perm is expanded to cover the narrower one
+ * before intersecting.
+ *
+ * Only ever widens the ACTOR's side, and only toward perms they already
+ * dominate — so the no-escalation property still holds.
+ */
+const IMPLIES: Record<string, string[]> = {
+  "reports.view_all":    ["reports.view_own"],
+  "shortcodes.manage":   ["shortcodes.view", "shortcodes.manage_sandbox"],
+  "portal_users.manage": ["portal_users.view"],
+};
+
+function expandPerms(perms: string[]): Set<string> {
+  const out = new Set(perms);
+  for (const p of perms) for (const implied of IMPLIES[p] ?? []) out.add(implied);
+  return out;
+}
+
+export function impersonatedClaims(
+  actor: SessionClaims,
+  target: NewSessionClaims,
+): NewSessionClaims {
+  const actorPerms = expandPerms(actor.perms);
+  return {
+    ...target,
+    perms: target.perms.filter((p) => actorPerms.has(p)),
+    imp: {
+      sub: actor.sub, email: actor.email,
+      name: actor.name, role: actor.role,
+    },
+  };
+}
+
+/** True when this session is someone viewing as someone else. */
+export function isImpersonating(session: SessionClaims | null): boolean {
+  return !!session?.imp;
 }
 
 /** The session's allowlist in the shape lib/acl.ts consumes. */
@@ -81,12 +182,16 @@ export function sessionAcl(session: SessionClaims | null): ShortcodeAcl {
   return session.shortcodeIds.map((id) => ({ id, from: from[String(id)] ?? 0 }));
 }
 
-export async function signSession(claims: Omit<SessionClaims, "iat" | "exp">): Promise<string> {
+export async function signSession(claims: NewSessionClaims): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
+  // An impersonated session is a support detour, not a working day: it
+  // expires in 30 minutes and drops the admin back to their own login
+  // rather than lingering for the full 8 hours.
+  const ttl = claims.imp ? IMPERSONATION_TTL_SECONDS : TTL_SECONDS;
   return await new SignJWT({ ...claims })
     .setProtectedHeader({ alg: ALG })
     .setIssuedAt(now)
-    .setExpirationTime(now + TTL_SECONDS)
+    .setExpirationTime(now + ttl)
     .sign(secretBytes());
 }
 
@@ -112,7 +217,9 @@ export async function getSession(): Promise<SessionClaims | null> {
   return await verifySession(jwt);
 }
 
-export async function setSessionCookie(jwt: string): Promise<void> {
+export async function setSessionCookie(
+  jwt: string, ttlSeconds?: number,
+): Promise<void> {
   (await cookies()).set({
     name: COOKIE_NAME,
     value: jwt,
@@ -120,7 +227,7 @@ export async function setSessionCookie(jwt: string): Promise<void> {
     secure: !COOKIE_INSECURE,
     sameSite: "strict",
     path: "/",
-    maxAge: TTL_SECONDS,
+    maxAge: ttlSeconds ?? TTL_SECONDS,
   });
 }
 
@@ -148,7 +255,7 @@ export async function clearSessionCookie(): Promise<void> {
  */
 export async function loadUserClaims(
   userId: number,
-): Promise<Omit<SessionClaims, "iat" | "exp"> | null> {
+): Promise<NewSessionClaims | null> {
   const r = await query<{
     id: number; email: string; name: string;
     role_key: string; perms: string[];

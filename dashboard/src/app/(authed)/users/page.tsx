@@ -15,6 +15,7 @@
  *     role is fixed to `client_viewer`.
  */
 import Link from "next/link";
+import ImpersonateButton from "./_impersonateButton";
 import { redirect } from "next/navigation";
 import { getSession, hasPerm } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
@@ -50,6 +51,10 @@ export default async function UsersPage({
   const canManageAll = hasPerm(session, Perms.PORTAL_USERS_MANAGE);
   const canViewAll   = hasPerm(session, Perms.PORTAL_USERS_VIEW);
   const canManageOwn = hasPerm(session, Perms.VIEWERS_MANAGE_OWN);
+  // super_admin + auditor (db/029). Read-only impersonation, so an
+  // auditor having it grants them nothing they could not already see —
+  // the claims intersect with their own perms (lib/auth.ts).
+  const canImpersonate = hasPerm(session, Perms.PORTAL_USERS_IMPERSONATE);
 
   // super_admin OR auditor → full platform list (auditor sees no edit
   // affordances). Both use the existing listUsers query.
@@ -63,6 +68,8 @@ export default async function UsersPage({
     return (
       <FullList
         readOnly={!canManageAll}
+        canImpersonate={canImpersonate}
+        selfId={Number(session.sub)}
         flash={flash}
         error={sp.error ?? null}
         filters={filters}
@@ -91,9 +98,10 @@ export default async function UsersPage({
 // --------------------------------------------------------------------
 
 async function FullList({
-  readOnly, flash, error, filters,
+  readOnly, canImpersonate, selfId, flash, error, filters,
 }: {
-  readOnly: boolean; flash: string | null; error: string | null;
+  readOnly: boolean; canImpersonate: boolean; selfId: number;
+  flash: string | null; error: string | null;
   filters: UserListFilters;
 }) {
   const [rows, roles] = await Promise.all([listUsers(filters), listRoles()]);
@@ -176,7 +184,8 @@ async function FullList({
               <th className="px-2 py-2 text-xs font-medium">Phone</th>
               <th className="px-2 py-2 text-xs font-medium">Active</th>
               <th className="px-2 py-2 text-xs font-medium">Last login</th>
-              {!readOnly ? <th className="px-2 py-2 text-xs font-medium text-right">Actions</th> : null}
+              {!readOnly || canImpersonate
+                ? <th className="px-2 py-2 text-xs font-medium text-right">Actions</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -195,15 +204,21 @@ async function FullList({
                 <td className="px-2 py-1.5 text-xs font-mono">
                   {u.last_login ? new Date(u.last_login).toISOString().slice(0,19).replace("T"," ") : "—"}
                 </td>
-                {!readOnly ? (
-                  <td className="px-2 py-1.5 text-xs text-right">
-                    <Link href={`/users/${u.id}`} className="underline">Edit</Link>
+                {!readOnly || canImpersonate ? (
+                  <td className="px-2 py-1.5 text-xs text-right space-x-2">
+                    {!readOnly ? (
+                      <Link href={`/users/${u.id}`} className="underline">Edit</Link>
+                    ) : null}
+                    {canImpersonate && u.id !== selfId ? (
+                      <ImpersonateButton userId={u.id} email={u.email} disabled={!u.active} />
+                    ) : null}
                   </td>
                 ) : null}
               </tr>
             ))}
             {rows.length === 0 ? (
-              <tr><td className="px-2 py-6 text-center text-sm text-slate-500" colSpan={readOnly ? 7 : 8}>
+              <tr><td className="px-2 py-6 text-center text-sm text-slate-500"
+                      colSpan={(!readOnly || canImpersonate) ? 8 : 7}>
                 {anyFilterActive ? "No users match the current filters." : "No users."}
               </td></tr>
             ) : null}

@@ -10,6 +10,7 @@ import { getSession, sessionAcl } from "@/lib/auth";
 import { query, reportQuery } from "@/lib/db";
 import { loadDailyTraffic, type DailyTrafficRow } from "@/lib/overview";
 import { aclClause, aclDeniesAll, type ShortcodeAcl } from "@/lib/acl";
+import { operatorColor } from "@/lib/operatorColors";
 import Link from "next/link";
 
 interface Totals {
@@ -28,14 +29,10 @@ interface Totals {
 const OPERATORS = ["airtel", "vodacom", "tigo", "halotel"] as const;
 type Operator = typeof OPERATORS[number];
 
-// Distinct brand-leaning fills so a grouped column stays readable.
-// Static Tailwind classes (NOT a template) so the JIT picks them up.
-const OPERATOR_FILL: Record<Operator, string> = {
-  vodacom: "bg-red-700",     // brand red, darker
-  airtel:  "bg-red-400",     // brand red, lighter — pairs with vodacom
-  tigo:    "bg-blue-500",
-  halotel: "bg-orange-500",
-};
+// Chart fills come from the shared palette (lib/operatorColors) so the
+// bars, the legend beneath them, the per-operator tiles on /reports and
+// /sessions, and the MNO filter pills all agree on what colour an MNO
+// is. A second local map is exactly how they drift apart.
 
 // ---------------------------------------------------------------------
 //  Inline icons (no dependency; stroke = currentColor)
@@ -289,7 +286,7 @@ function TrafficBarChart({ rows, monthYM }: { rows: DailyTrafficRow[]; monthYM: 
                 return (
                   <div
                     key={op}
-                    className={`flex-1 shrink-0 rounded-t transition-opacity hover:opacity-80 ${OPERATOR_FILL[op]}`}
+                    className={`flex-1 shrink-0 rounded-t transition-opacity hover:opacity-80 ${operatorColor(op).fill}`}
                     style={{ height: `${heightPct}%`, minHeight: n > 0 ? 2 : 0 }}
                     title={`${op}: ${n.toLocaleString()}`}
                   />
@@ -315,7 +312,7 @@ function TrafficBarChart({ rows, monthYM }: { rows: DailyTrafficRow[]; monthYM: 
           {ranked.map((op, i) => (
             <div key={op} className="flex items-center gap-1.5">
               <span className="w-3 text-right tabular-nums text-slate-400">{i + 1}</span>
-              <span className={`inline-block w-3 h-3 rounded-sm ${OPERATOR_FILL[op]}`} />
+              <span className={`inline-block w-3 h-3 rounded-sm ${operatorColor(op).fill}`} />
               <span className="capitalize text-slate-700 dark:text-slate-300">{op}</span>
               <span className="font-mono tabular-nums text-slate-500">{(perOp[op] ?? 0).toLocaleString()}</span>
             </div>

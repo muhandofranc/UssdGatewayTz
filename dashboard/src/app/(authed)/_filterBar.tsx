@@ -5,6 +5,7 @@
  * /sessions and /reports — both pages key off the same searchParams.
  */
 import Link from "next/link";
+import { operatorColor } from "@/lib/operatorColors";
 
 const OPERATORS = ["vodacom", "airtel", "tigo", "halotel"] as const;
 
@@ -128,6 +129,12 @@ export default function FilterBar({ basePath, sp, maxWindowDays }: Props) {
                     : "border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800",
                 ].join(" ")}
               >
+                {/* The swatch stays visible in both states so the
+                    colour→MNO mapping is learnable from the filter, not
+                    only from the tiles. On the active (inverted) pill it
+                    is the one thing still carrying the operator's
+                    colour. */}
+                <span className={`mr-1.5 inline-block h-2 w-2 rounded-sm align-middle ${operatorColor(op).fill}`} />
                 {op}
               </Link>
             );

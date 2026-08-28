@@ -17,10 +17,14 @@ import SidebarNav, { type NavItem } from "./_nav";
 import ThemeToggle from "@/components/ThemeToggle";
 import TopProgress from "./_topProgress";
 import SearchProgress from "./_searchProgress";
+import ImpersonationBanner from "./_impersonationBanner";
 
 export default async function AuthedLayout({
-  children,
-}: { children: React.ReactNode }) {
+  children, modal,
+}: { children: React.ReactNode
+  /** The @modal parallel slot — see the render below. */
+  modal: React.ReactNode;
+}) {
   const session = await getSession();
   if (!session) redirect("/login");
 
@@ -159,9 +163,20 @@ export default async function AuthedLayout({
             </div>
           </div>
         </header>
+        {/* Sits directly above the content, sticky, so it stays on
+            screen while scrolling a long report — the moment it scrolls
+            away is the moment someone forgets whose data they are
+            reading. */}
+        {session.imp ? (
+          <ImpersonationBanner viewingAs={session.email} realEmail={session.imp.email} />
+        ) : null}
         <main className="flex-1 px-6 py-6">
           <div className="mx-auto w-full max-w-[100rem]">{children}</div>
         </main>
+        {/* Parallel slot for intercepted edit routes. Empty on every
+            normal navigation (see @modal/default.tsx); filled with a
+            dialog when an Edit link is followed from within the app. */}
+        {modal}
       </div>
     </div>
   );
