@@ -5,7 +5,7 @@
  * ussd_session_logs at request time.
  *
  * Per-shortcode access control is enforced the same way as the
- * live reports: every public function takes `allowedShortcodeIds:
+ * live reports: every public function takes an ACL (`acl:
  * number[] | null`.
  *   * null  -> unrestricted (super_admin / auditor; anyone with
  *              reports.view_all)
@@ -13,6 +13,7 @@
  *   * [...] -> intersect with the user-selected filter
  */
 import { query } from "./db";
+import { aclClause, type ShortcodeAcl } from "./acl";
 
 export type GroupBy =
   | "date"
@@ -59,7 +60,7 @@ export function dataThroughDate(): string {
 
 export async function loadDailySummary(
   f: SummaryFilters,
-  allowedShortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
   groupBy: GroupBy,
   maxRows: number = 5000,
 ): Promise<SummaryRow[]> {
@@ -109,13 +110,14 @@ export async function loadDailySummary(
   // 'unmatched' legs (legs with no shortcode at the gateway). Only
   // unrestricted callers (super_admin / auditor) see them — that's
   // intentional: clients can't be granted access to 'unmatched'.
-  if (allowedShortcodeIds !== null) {
-    if (allowedShortcodeIds.length === 0) {
-      // Caller owns nothing → no rows.
-      conds.push("FALSE");
-    } else {
-      conds.push(`d.shortcode_id = ANY(${next(allowedShortcodeIds)}::int[])`);
-    }
+  if (acl !== null) {
+    // The floor is per shortcode, and "date" grain because the rollup
+    // stores whole days: a hand-over part-way through a day moves the
+    // floor to the next one rather than showing the new owner a bucket
+    // that also counts the previous owner's sessions.
+    conds.push(aclClause(acl, {
+      scCol: "d.shortcode_id", tsCol: "d.date", grain: "date", push: next,
+    }));
   }
 
   if (f.operatorIds && f.operatorIds.length) {
@@ -196,7 +198,7 @@ export const SUMMARY_CSV_ROW_CAP = 50_000;
  */
 export function streamDailySummaryCsv(
   f: SummaryFilters,
-  allowedShortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
   groupBy: GroupBy,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -222,7 +224,7 @@ export function streamDailySummaryCsv(
         // ACL + filter logic. Lift the LIMIT to SUMMARY_CSV_ROW_CAP
         // for the export (vs. the page's default of 5000).
         const rows = await loadDailySummary(
-          f, allowedShortcodeIds, groupBy, SUMMARY_CSV_ROW_CAP,
+          f, acl, groupBy, SUMMARY_CSV_ROW_CAP,
         );
 
         for (const r of rows) {

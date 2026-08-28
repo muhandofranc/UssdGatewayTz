@@ -1,13 +1,15 @@
 /**
  * Landing page — summary tiles + daily traffic-by-network bar chart.
- * Counts are scoped to the JWT's shortcodeIds (null = unrestricted
- * for super_admin).
+ * Counts are scoped to the JWT's shortcode allowlist and to the date
+ * each of those shortcodes was allocated to the viewer (null allowlist
+ * = unrestricted, for super_admin).
  */
 import { Suspense, type ReactNode } from "react";
 import { unstable_cache } from "next/cache";
-import { getSession } from "@/lib/auth";
+import { getSession, sessionAcl } from "@/lib/auth";
 import { query, reportQuery } from "@/lib/db";
 import { loadDailyTraffic, type DailyTrafficRow } from "@/lib/overview";
+import { aclClause, aclDeniesAll, type ShortcodeAcl } from "@/lib/acl";
 import Link from "next/link";
 
 interface Totals {
@@ -60,11 +62,15 @@ const IconArrow    = <Svg><path d="M5 12h14" /><path d="m13 6 6 6-6 6" /></Svg>;
 //  Server queries
 // ---------------------------------------------------------------------
 
-async function loadTotals(shortcodeIds: number[] | null): Promise<Totals> {
-  const scClause = shortcodeIds === null
-    ? "TRUE"
-    : (shortcodeIds.length === 0 ? "FALSE" : "shortcode_id = ANY($1::int[])");
-  const params = shortcodeIds === null || shortcodeIds.length === 0 ? [] : [shortcodeIds];
+async function loadTotals(acl: ShortcodeAcl): Promise<Totals> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const params: any[] = [];
+  // The same predicate is spliced into all four sub-selects, so build it
+  // once — each sub-select then reuses the same placeholders.
+  const scClause = aclClause(acl, {
+    scCol: "shortcode_id", tsCol: "ts", grain: "ts",
+    push: (v) => { params.push(v); return `$${params.length}`; },
+  });
   const r = await query<Totals>(
     `SELECT
        (SELECT COUNT(*) FROM ussd_session_logs WHERE ts > now() - interval '24 hours' AND ${scClause}) AS rows_24h,
@@ -85,16 +91,19 @@ interface TrailRow { ussd_string: string; n: number }
  * off the interactive pool.
  */
 async function loadTopTrails(
-  shortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
   mode: { kind: "day"; date: string } | { kind: "today" },
   limit = 8,
 ): Promise<TrailRow[]> {
   const conds: string[] = ["ussd_string IS NOT NULL", "ussd_string <> ''"];
-  const params: (string | number[])[] = [];
-  const next = (v: string | number[]) => { params.push(v); return `$${params.length}`; };
-  if (shortcodeIds !== null) {
-    if (shortcodeIds.length === 0) return [];
-    conds.push(`shortcode_id = ANY(${next(shortcodeIds)}::int[])`);
+  const params: (string | number[] | number)[] = [];
+  const next = (v: string | number[] | number) => { params.push(v); return `$${params.length}`; };
+  if (acl !== null) {
+    if (aclDeniesAll(acl)) return [];
+    conds.push(aclClause(acl, {
+      scCol: "shortcode_id", tsCol: "ts", grain: "ts",
+      push: (v) => next(v as string | number[] | number),
+    }));
   }
   if (mode.kind === "day") {
     const p = next(mode.date);
@@ -116,16 +125,19 @@ async function loadTopTrails(
 
 // Cross-request cache for the trails. A past peak day is effectively immutable,
 // so cache it for a day; today / last-24h refresh every 5 minutes. The DB scope
-// (shortcodeIds) is part of the key so users don't share each other's rows.
+// (the ACL) is part of the key so users don't share each other's rows.
 function topTrailsCached(
-  shortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
   mode: { kind: "day"; date: string } | { kind: "today" },
   revalidate: number,
 ): Promise<TrailRow[]> {
   const key = mode.kind === "day" ? `day:${mode.date}` : "today";
   return unstable_cache(
-    () => loadTopTrails(shortcodeIds, mode),
-    ["top-trails", key, JSON.stringify(shortcodeIds ?? "all")],
+    () => loadTopTrails(acl, mode),
+    // The ACL — ids AND their time floors — is part of the cache key:
+    // two owners of the same shortcode with different hand-over dates
+    // must not share a cached row set.
+    ["top-trails", key, JSON.stringify(acl ?? "all")],
     { revalidate },
   )();
 }
@@ -462,9 +474,9 @@ function TrailsSkeleton() {
 // Async — suspends while the (cached) GROUP BY queries run, so the section
 // STREAMS in after the rest of the page has painted instead of blocking it.
 async function TrailsSection({
-  shortcodeIds, daily,
+  acl, daily,
 }: {
-  shortcodeIds: number[] | null;
+  acl: ShortcodeAcl;
   daily: DailyTrafficRow[];
 }) {
   // Busiest day of the selected month (by billable units, matching the chart).
@@ -481,9 +493,9 @@ async function TrailsSection({
 
   const [peakTrails, todayTrails] = await Promise.all([
     peakDate
-      ? topTrailsCached(shortcodeIds, { kind: "day", date: peakDate }, peakIsPast ? 86400 : 300)
+      ? topTrailsCached(acl, { kind: "day", date: peakDate }, peakIsPast ? 86400 : 300)
       : Promise.resolve([] as TrailRow[]),
-    topTrailsCached(shortcodeIds, { kind: "today" }, 300),
+    topTrailsCached(acl, { kind: "today" }, 300),
   ]);
   const peakLabel = peakDate
     ? new Date(peakDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })
@@ -522,12 +534,15 @@ export default async function Home({
 
   const session = await getSession();
   if (!session) return null;       // layout already redirected; satisfy TS
+  // Ids AND the instant each grant began, so a re-allocated shortcode
+  // counts only from the hand-over onwards.
+  const acl = sessionAcl(session);
 
   // Fire totals + chart query in parallel — independent reads, no
   // ordering between them.
   const [totals, daily] = await Promise.all([
-    loadTotals(session.shortcodeIds),
-    loadDailyTraffic(session.shortcodeIds, month),
+    loadTotals(acl),
+    loadDailyTraffic(acl, month),
   ]);
 
   const legs24 = Number(totals.rows_24h);
@@ -609,7 +624,7 @@ export default async function Home({
       </div>
 
       <Suspense fallback={<TrailsSkeleton />}>
-        <TrailsSection shortcodeIds={session.shortcodeIds} daily={daily} />
+        <TrailsSection acl={acl} daily={daily} />
       </Suspense>
 
       <div>

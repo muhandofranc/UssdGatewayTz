@@ -5,9 +5,13 @@
  *
  * `shortcodeIds` is the per-user shortcode allowlist materialised at
  * login (owner_user_id = userId UNION the portal_user_shortcodes
- * junction). For super_admin we set `shortcodeIds = null` to signal
- * "all" — every query helper that filters by this list treats null
- * as the all-pass case.
+ * junction), and `shortcodeFrom` is the instant each of those grants
+ * began — so a shortcode re-allocated from one client to another shows
+ * its new owner only the traffic from the hand-over onwards. For
+ * super_admin we set `shortcodeIds = null` to signal "all" — every
+ * query helper that filters by this list treats null as the all-pass
+ * case. Use `sessionAcl()` to get the pair in the shape lib/acl.ts
+ * consumes; that module is the only place that turns it into SQL.
  *
  * Rotation: bumping SESSION_SECRET invalidates every live session
  * (jose will reject the HMAC). This is the only revocation primitive;
@@ -16,6 +20,7 @@
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import { cookies } from "next/headers";
 import { query } from "./db";
+import type { ShortcodeAcl } from "./acl";
 
 const ALG = "HS256";
 
@@ -52,6 +57,28 @@ export interface SessionClaims extends JWTPayload {
   role: string;            // roles.key
   perms: string[];         // permissions.key list
   shortcodeIds: number[] | null; // null = unrestricted (super_admin)
+  /**
+   * Unix seconds from which a shortcode is readable, keyed by shortcode
+   * id — the instant it was allocated to this user. Only shortcodes
+   * that have actually changed hands appear here; anything absent has
+   * no floor. Sparse rather than index-aligned on purpose: a floor per
+   * shortcode would add ~15 bytes each and push a JWT for a client with
+   * ~200 shortcodes past the 4 KB cookie limit, while re-allocations
+   * are rare.
+   *
+   * Optional: sessions minted before this field existed have no floors,
+   * which is the pre-scoping behaviour — they pick it up at their next
+   * login rather than being logged out.
+   */
+  shortcodeFrom?: Record<string, number>;
+}
+
+/** The session's allowlist in the shape lib/acl.ts consumes. */
+export function sessionAcl(session: SessionClaims | null): ShortcodeAcl {
+  if (!session) return [];
+  if (session.shortcodeIds === null) return null;
+  const from = session.shortcodeFrom ?? {};
+  return session.shortcodeIds.map((id) => ({ id, from: from[String(id)] ?? 0 }));
 }
 
 export async function signSession(claims: Omit<SessionClaims, "iat" | "exp">): Promise<string> {
@@ -145,18 +172,41 @@ export async function loadUserClaims(
   // check off the hard-coded role key makes future "global read-only"
   // roles automatically inherit the right scope.
   let shortcodeIds: number[] | null;
+  let shortcodeFrom: Record<string, number> = {};
   if (row.perms.includes("reports.view_all")) {
     shortcodeIds = null;
   } else {
-    const sc = await query<{ id: number }>(
-      `SELECT id FROM shortcodes
-        WHERE owner_user_id = $1
-       UNION
-       SELECT shortcode_id AS id FROM portal_user_shortcodes
-        WHERE portal_user_id = $1`,
+    // Each grant carries the instant it started: owner_since for an
+    // owned shortcode, granted_at for a collaborator grant. A user who
+    // holds both takes the earlier of the two — their access really did
+    // begin then.
+    const sc = await query<{ id: number; from_ts: string; reallocated: boolean }>(
+      `SELECT id, MIN(from_ts)::bigint AS from_ts, bool_or(floored) AS reallocated
+         FROM (
+           -- Owned: floored only if the shortcode changed hands after it
+           -- was created; otherwise the owner has always had it.
+           SELECT id, EXTRACT(EPOCH FROM owner_since) AS from_ts,
+                  (owner_since > created_at)          AS floored
+             FROM shortcodes
+            WHERE owner_user_id = $1
+           UNION ALL
+           -- Collaborator grants always start when they were granted.
+           SELECT shortcode_id AS id, EXTRACT(EPOCH FROM granted_at), TRUE
+             FROM portal_user_shortcodes
+            WHERE portal_user_id = $1
+         ) g(id, from_ts, floored)
+        GROUP BY id
+        ORDER BY id`,
       [userId],
     );
     shortcodeIds = sc.rows.map((r) => r.id);
+    // Only the re-allocated ones — see the field doc. `reallocated` is
+    // computed by the DB (owner_since > created_at) so a shortcode that
+    // has always had one owner never carries a floor.
+    shortcodeFrom = {};
+    for (const r of sc.rows) {
+      if (r.reallocated) shortcodeFrom[String(r.id)] = Number(r.from_ts) || 0;
+    }
   }
   return {
     sub: String(row.id),
@@ -165,6 +215,7 @@ export async function loadUserClaims(
     role: row.role_key,
     perms: row.perms,
     shortcodeIds,
+    shortcodeFrom,
   };
 }
 

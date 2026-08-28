@@ -23,7 +23,7 @@ import type { ReactNode } from "react";
 export type NavIconKey =
   | "overview" | "summary" | "sessions" | "hops" | "exports"
   | "integration" | "simulator" | "shortcodes" | "operators"
-  | "myShortcodes" | "users" | "audit";
+  | "myShortcodes" | "users" | "audit" | "archive";
 
 export interface NavItem {
   href: string;
@@ -73,6 +73,8 @@ const NAV_ICONS: Record<NavIconKey, ReactNode> = {
   users: <Svg><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.9" /><path d="M16 3.1a4 4 0 0 1 0 7.8" /></Svg>,
   // Shield with tick — tamper-evident trail
   audit: <Svg><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /><path d="m9 12 2 2 4-4" /></Svg>,
+  // Lidded box — cold storage, put away rather than in use
+  archive: <Svg><rect x="2" y="3" width="20" height="5" rx="1" /><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></Svg>,
 };
 
 /**

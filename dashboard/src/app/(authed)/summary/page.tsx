@@ -18,7 +18,7 @@
  */
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getSession, hasPerm } from "@/lib/auth";
+import { getSession, hasPerm, sessionAcl } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
 import { loadShortcodeOptions } from "@/lib/reports";
 import { listOperators } from "@/lib/shortcodes";
@@ -57,6 +57,10 @@ export default async function SummaryPage({
 }: { searchParams: Promise<SearchParams> }) {
   const session = await getSession();
   if (!session) redirect("/login");
+  // Time-scoped allowlist: which shortcodes, and from when each was
+  // allocated to this user (lib/acl.ts). A re-allocated shortcode shows
+  // its new owner nothing from before the hand-over.
+  const acl = sessionAcl(session);
   // Both view_own and view_all callers reach this page (gate is in
   // rbac.ts middleware); the per-row predicate handles scoping.
   const canSeeAll = hasPerm(session, Perms.REPORTS_VIEW_ALL);
@@ -80,9 +84,9 @@ export default async function SummaryPage({
   };
 
   const [rows, operators, shortcodes, owners] = await Promise.all([
-    loadDailySummary(filters, session.shortcodeIds, groupBy),
+    loadDailySummary(filters, acl, groupBy),
     listOperators(),
-    loadShortcodeOptions(session.shortcodeIds),
+    loadShortcodeOptions(acl),
     canSeeAll ? listShortcodeOwners() : Promise.resolve([]),
   ]);
 

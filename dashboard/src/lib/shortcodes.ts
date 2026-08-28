@@ -41,6 +41,15 @@ export interface ShortcodeRow {
   status_set_at: string | null;
   created_at: string;
   updated_at: string;
+  /** When the current owner was given this shortcode (db/025). */
+  owner_since: string;
+  /**
+   * True when this shortcode changed hands after it was created — i.e.
+   * the owner's reports start part-way through its history. Drives the
+   * "traffic from …" note so an owner doesn't read the missing earlier
+   * months as a gap in the data.
+   */
+  reallocated: boolean;
 }
 
 export interface OperatorOption {
@@ -61,7 +70,9 @@ const SHORTCODE_SELECT = `
            s.status_set_by_id,
            sb.email AS status_set_by_email,
            s.status_set_at::text,
-           s.created_at::text, s.updated_at::text
+           s.created_at::text, s.updated_at::text,
+           s.owner_since::text,
+           (s.owner_since > s.created_at) AS reallocated
       FROM shortcodes s
       JOIN operators o    ON o.id = s.operator_id
       JOIN portal_users u ON u.id = s.owner_user_id
@@ -139,6 +150,79 @@ export async function listShortcodesOwnedBy(userId: number): Promise<ShortcodeRo
   return r.rows;
 }
 
+/* ---------- label generation ----------------------------------------
+ * Labels are DERIVED, never typed. Uniformity is the whole point: a
+ * label a human can edit drifts within weeks, and reports that group
+ * by label then split one shortcode across several spellings.
+ *
+ *   production →  "Acme Ltd · *123# · Vodacom Tanzania"
+ *   sandbox    →  "Acme Ltd · *123# · SANDBOX"
+ *
+ * Sandbox carries no network because it never reaches one — it exists
+ * only for the simulator, and the real network is chosen at promotion.
+ */
+export const LABEL_SEP = " · ";
+export const SANDBOX_NETWORK_LABEL = "SANDBOX";
+
+export function buildShortcodeLabel(args: {
+  ownerName: string;
+  code: string;
+  operatorDisplayName?: string | null;
+  environment: ShortcodeEnvironment;
+}): string {
+  const network = args.environment === "sandbox"
+    ? SANDBOX_NETWORK_LABEL
+    : (args.operatorDisplayName || "").trim();
+  const code = args.code.trim();
+  // shortcodes.label is VARCHAR(120), so a very long owner name has to
+  // give. Clip the OWNER, not the joined string: truncating the tail
+  // would drop the code and network — the two parts that identify the
+  // shortcode — and leave a label of nothing but a name.
+  const tail  = [code, network].filter((x) => x.length > 0);
+  const budget = 120 - tail.reduce((n, x) => n + x.length + LABEL_SEP.length, 0);
+  let owner = args.ownerName.trim();
+  if (owner.length > budget) owner = budget > 1 ? owner.slice(0, budget - 1) + "…" : "";
+  return [owner, ...tail].filter((x) => x.length > 0).join(LABEL_SEP);
+}
+
+/** Owner display name + operator display name, for label generation. */
+export async function labelPartsFor(
+  ownerUserId: number, operatorId: number,
+): Promise<{ ownerName: string; operatorDisplayName: string }> {
+  const r = await query<{ owner_name: string; operator_display_name: string }>(
+    `SELECT COALESCE(NULLIF(TRIM(u.name), ''), u.email) AS owner_name,
+            o.display_name                              AS operator_display_name
+       FROM portal_users u
+       CROSS JOIN operators o
+      WHERE u.id = $1 AND o.id = $2`,
+    [ownerUserId, operatorId],
+  );
+  const row = r.rows[0];
+  return {
+    // Falling back to the ids keeps a label generatable even if a row
+    // vanished mid-request; the save then still succeeds.
+    ownerName: row?.owner_name ?? `user#${ownerUserId}`,
+    operatorDisplayName: row?.operator_display_name ?? "",
+  };
+}
+
+/**
+ * The operator a SANDBOX shortcode is filed under.
+ *
+ * Sandbox is network-agnostic — the gateway never routes it — but
+ * `shortcodes.operator_id` is NOT NULL, so a row still needs one. The
+ * lowest active operator id is used purely as a placeholder; the real
+ * network is chosen by the super_admin at promotion time.
+ */
+export async function defaultSandboxOperatorId(): Promise<number> {
+  const r = await query<{ id: number }>(
+    `SELECT id FROM operators WHERE active = TRUE ORDER BY id LIMIT 1`,
+  );
+  const id = r.rows[0]?.id;
+  if (!id) throw new Error("no active operator configured");
+  return id;
+}
+
 export async function listOperators(): Promise<OperatorOption[]> {
   const r = await query<OperatorOption>(
     `SELECT id, name, display_name FROM operators WHERE active = TRUE ORDER BY id`,
@@ -203,20 +287,36 @@ export async function createShortcode(
  * Returns the new production row's id.
  */
 export async function promoteShortcode(
-  sandboxId: number, byUserId: number,
+  sandboxId: number, operatorId: number, byUserId: number,
 ): Promise<number> {
+  // The sandbox row carries a placeholder operator and a "… · SANDBOX"
+  // label, so neither can be cloned: promotion is where the live network
+  // is decided, and the label is rebuilt around it.
+  const src = await query<{ code: string; owner_user_id: number }>(
+    `SELECT code, owner_user_id FROM shortcodes
+      WHERE id = $1 AND environment = 'sandbox'`,
+    [sandboxId],
+  );
+  const row = src.rows[0];
+  if (!row) throw new Error("promote failed: shortcode not found or not sandbox");
+  const { ownerName, operatorDisplayName } =
+    await labelPartsFor(row.owner_user_id, operatorId);
+  const label = buildShortcodeLabel({
+    ownerName, code: row.code, operatorDisplayName, environment: "production",
+  });
+
   const r = await query<{ id: number }>(
     `INSERT INTO shortcodes
        (operator_id, code, label, environment, owner_user_id, handler_url,
         auth_mode, bearer_token, timeout_secs, active,
         status, status_message, status_set_by_id, status_set_at)
-     SELECT operator_id, code, label, 'production', owner_user_id, handler_url,
+     SELECT $3, code, $4, 'production', owner_user_id, handler_url,
             auth_mode, bearer_token, timeout_secs, TRUE,
             'active', NULL, $2, now()
        FROM shortcodes
       WHERE id = $1 AND environment = 'sandbox'
      RETURNING id`,
-    [sandboxId, byUserId],
+    [sandboxId, byUserId, operatorId, label],
   );
   const id = r.rows[0]?.id;
   if (!id) throw new Error("promote failed: shortcode not found or not sandbox");

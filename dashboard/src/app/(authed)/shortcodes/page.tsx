@@ -24,6 +24,7 @@ import {
   type ShortcodeEnvironment, type ShortcodeListFilters, type ShortcodeStatus,
 } from "@/lib/shortcodes";
 import { listShortcodeOwners } from "@/lib/summary";
+import { fmtTs } from "@/lib/datetime";
 import { actionSetShortcodeActive, actionPromoteShortcode } from "./actions";
 
 type SearchParams = {
@@ -208,6 +209,15 @@ export default async function ShortcodesPage({
                 <td className="px-2 py-1.5 text-xs">{r.label ?? "—"}</td>
                 <td className="px-2 py-1.5 text-xs">
                   <span title={r.owner_email} className="font-mono">{r.owner_name}</span>
+                  {r.reallocated ? (
+                    // Re-allocated: this owner's reports start here, so
+                    // an admin comparing their figures against the raw
+                    // totals knows why they differ.
+                    <div className="text-[10px] text-amber-700 dark:text-amber-400"
+                         title={`Owner's reports show traffic from ${fmtTs(r.owner_since)}`}>
+                      since {r.owner_since.slice(0, 10)}
+                    </div>
+                  ) : null}
                 </td>
                 <td className="px-2 py-1.5 text-xs font-mono max-w-[20rem] truncate" title={r.handler_url}>
                   {r.handler_url}
@@ -236,12 +246,25 @@ export default async function ShortcodesPage({
                   <td className="px-2 py-1.5 text-xs text-right space-x-2">
                     <Link href={`/shortcodes/${r.id}`} className="underline">Edit</Link>
                     {r.environment === "sandbox" ? (
-                      <form action={async () => {
+                      // Promotion is where the live network is decided —
+                      // the sandbox row only ever carried a placeholder —
+                      // so the picker sits on the button, not on creation.
+                      <form action={async (fd: FormData) => {
                         "use server";
-                        await actionPromoteShortcode(r.id);
-                      }} className="inline">
+                        await actionPromoteShortcode(
+                          r.id, parseInt(String(fd.get("operator_id") ?? ""), 10),
+                        );
+                      }} className="inline-flex items-center gap-1 align-middle">
+                        <select name="operator_id" required defaultValue=""
+                                aria-label="Live network to promote onto"
+                                className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-1 py-0.5 text-[11px]">
+                          <option value="" disabled>network…</option>
+                          {operators.map((o) => (
+                            <option key={o.id} value={o.id}>{o.display_name}</option>
+                          ))}
+                        </select>
                         <button className="underline text-violet-700 dark:text-violet-300"
-                                title="Clone this sandbox shortcode into a new production shortcode">
+                                title="Create a production shortcode on the chosen network from this sandbox one">
                           Promote
                         </button>
                       </form>

@@ -62,13 +62,20 @@ TASKS_DAILY: list[tuple[str, str]] = [
         "ensure_session_log_partitions_weekly(2)",
     ),
     (
-        # Retention — drops monthly/weekly/daily partitions whose
-        # END date is older than 90 days. Fast metadata-only drops,
-        # not a row-by-row DELETE. Idempotent: returns 0 when
-        # nothing is past retention. Tune the 90 to your compliance
-        # / disk budget — see db/014 for the function definition.
-        "SELECT drop_old_session_log_partitions(90)",
-        "drop_old_session_log_partitions(90)",
+        # Retention — 120 days, and the expired partitions are ARCHIVED
+        # rather than dropped: each one is re-parented onto
+        # ussd_session_logs_archive, a table nothing on the platform
+        # queries. Metadata-only (no rows are copied), and it commits
+        # per partition so the live table's exclusive lock is held for
+        # milliseconds rather than for the whole run. See db/026.
+        #
+        # The INOUT parameter is passed explicitly as NULL so the CALL
+        # returns a row and the count lands in the scheduler log.
+        #
+        # drop_old_session_log_partitions(N) still exists as the
+        # emergency lever if the archive ever has to be bypassed.
+        "CALL archive_old_session_log_partitions(120, NULL)",
+        "archive_old_session_log_partitions(120)",
     ),
 ]
 

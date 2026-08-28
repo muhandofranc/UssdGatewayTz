@@ -52,3 +52,27 @@ export function fmtTs(input: string | Date | null | undefined): string {
   return `${g("year")}-${g("month")}-${g("day")} ${g("hour")}:${g("minute")}:${g("second")}`;
 }
 
+
+/**
+ * The first whole day at or after `epochSeconds`, as 'YYYY-MM-DD' in
+ * Tanzania time — the day boundary the rollups bucket by.
+ *
+ * Used for the ACL's time floor on day-grained tables (lib/acl.ts): a
+ * hand-over at 14:30 makes the NEXT day the first one the new owner may
+ * see, because the day it happened is a single row that also counts the
+ * previous owner's traffic. A hand-over exactly at midnight needs no
+ * rounding — that day is wholly theirs.
+ */
+export function ceilToLocalDate(epochSeconds: number): string {
+  const d = new Date(epochSeconds * 1000);
+  const parts = _fmt.formatToParts(d);
+  const g = (t: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === t)?.value ?? "";
+  const day = `${g("year")}-${g("month")}-${g("day")}`;
+  const midnight = g("hour") === "00" && g("minute") === "00" && g("second") === "00";
+  if (midnight) return day;
+  // Add a day in UTC on the plain date — no DST in EAT, so this is exact.
+  const next = new Date(`${day}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
+}

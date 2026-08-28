@@ -15,7 +15,7 @@
  * super_admin's bulk pulls show up in the audit log.
  */
 import { NextResponse } from "next/server";
-import { getSession, hasPerm } from "@/lib/auth";
+import { getSession, hasPerm, sessionAcl } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
 import { audit, clientIp } from "@/lib/audit";
 import {
@@ -71,7 +71,7 @@ export async function GET(req: Request) {
     detail: { filters, groupBy },
   });
 
-  const stream = streamDailySummaryCsv(filters, session.shortcodeIds, groupBy);
+  const stream = streamDailySummaryCsv(filters, sessionAcl(session), groupBy);
   const filename = `ussd_summary_${fromDate}_to_${toDate}_${groupBy}.csv`;
   return new NextResponse(stream as unknown as BodyInit, {
     status: 200,

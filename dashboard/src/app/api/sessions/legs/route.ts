@@ -8,7 +8,7 @@
  * a session_id outside their owned shortcodes just gets [].
  */
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth";
+import { getSession, sessionAcl } from "@/lib/auth";
 import { loadLegsForSession } from "@/lib/reports";
 
 export async function GET(req: Request) {
@@ -30,7 +30,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "session_id and operator required" }, { status: 400 });
   }
   const legs = await loadLegsForSession(
-    sessionId, operator, session.shortcodeIds, firstTs, lastTs,
+    sessionId, operator, sessionAcl(session), firstTs, lastTs,
   );
   return NextResponse.json({ legs });
 }

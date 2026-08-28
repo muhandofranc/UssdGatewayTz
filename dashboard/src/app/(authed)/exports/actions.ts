@@ -45,6 +45,16 @@ export async function actionCreateExport(fd: FormData) {
     // SELECT so the resulting CSV can never contain shortcodes the
     // requester doesn't own. super_admin gets null = unrestricted.
     allowedShortcodeIds: session.shortcodeIds,
+    // ...and the instant each of those grants began, index-aligned with
+    // the ids, so an export of a re-allocated shortcode stops at the
+    // hand-over the same way the on-screen reports do. The JWT carries
+    // only the floored ones (cookie size); flatten to an aligned array
+    // here because the filter JSON lives in a table, not a cookie.
+    // Older queued rows simply lack the field and the worker treats
+    // them as unfloored — the pre-scoping behaviour.
+    allowedShortcodeFrom: session.shortcodeIds === null
+      ? null
+      : session.shortcodeIds.map((id) => session.shortcodeFrom?.[String(id)] ?? 0),
     // Useful audit metadata baked in.
     requested_by_email: session.email,
     requested_by_role:  session.role,

@@ -21,6 +21,7 @@ import { Perms } from "@/lib/rbac";
 import {
   codeExists, countUnpromotedSandbox, createShortcode,
   SANDBOX_PER_OPERATOR_LIMIT,
+  buildShortcodeLabel, labelPartsFor, defaultSandboxOperatorId,
 } from "@/lib/shortcodes";
 import { audit, clientIp } from "@/lib/audit";
 
@@ -35,15 +36,17 @@ export async function actionCreateSandboxShortcode(fd: FormData) {
   }
 
   const str = (k: string) => (fd.get(k)?.toString() ?? "").trim();
-  const operator_id  = parseInt(str("operator_id"), 10);
+  // No operator prompt on the sandbox form: a sandbox shortcode never
+  // reaches a network, so asking a client to pick one is a question with
+  // no consequence. The placeholder keeps the NOT NULL column satisfied;
+  // the real network is chosen by a super_admin at promotion.
+  const operator_id  = await defaultSandboxOperatorId();
   const code         = str("code");
-  const label        = str("label") || null;
   const handler_url  = str("handler_url");
   const auth_mode    = str("auth_mode") === "bearer" ? "bearer" : "none";
   const bearer_token = str("bearer_token") || null;
   const timeout_secs = parseInt(str("timeout_secs"), 10);
 
-  if (!Number.isFinite(operator_id) || operator_id <= 0) return back("operator is required");
   if (!code)                                             return back("code is required");
   if (code.length > 32)                                  return back("code too long (max 32)");
   if (!handler_url || !/^https?:\/\//i.test(handler_url)) return back("handler URL must start with http:// or https://");
@@ -53,12 +56,14 @@ export async function actionCreateSandboxShortcode(fd: FormData) {
     return back("timeout must be 1–30 seconds");
   }
 
-  // Anti-abuse cap: at most N un-promoted sandbox shortcodes per operator.
-  // Promoting one (a production sibling then exists) frees a slot.
+  // Anti-abuse cap: at most N un-promoted sandbox shortcodes. Now that
+  // every sandbox row sits on the same placeholder operator, this is
+  // effectively a per-user cap — so the message no longer says "per
+  // operator", which would read as a limit the client cannot see.
   const inFlight = await countUnpromotedSandbox(Number(session.sub), operator_id);
   if (inFlight >= SANDBOX_PER_OPERATOR_LIMIT) {
     return back(
-      `You already have ${SANDBOX_PER_OPERATOR_LIMIT} sandbox shortcodes for this operator ` +
+      `You already have ${SANDBOX_PER_OPERATOR_LIMIT} sandbox shortcodes ` +
       `awaiting promotion. Promote one to production before creating another.`,
     );
   }
@@ -66,8 +71,13 @@ export async function actionCreateSandboxShortcode(fd: FormData) {
   // Uniqueness is per-environment: a client may reuse a code that already
   // exists in production, but not one they already have in sandbox.
   if (await codeExists(operator_id, code, "sandbox")) {
-    return back("you already have a sandbox shortcode with this operator + code");
+    return back("you already have a sandbox shortcode with this code");
   }
+
+  // Label is derived, never typed — that is the whole point of dropping
+  // the field from the form: every label reads "Owner · Code · Network".
+  const { ownerName } = await labelPartsFor(Number(session.sub), operator_id);
+  const label = buildShortcodeLabel({ ownerName, code, environment: "sandbox" });
 
   const id = await createShortcode(
     {

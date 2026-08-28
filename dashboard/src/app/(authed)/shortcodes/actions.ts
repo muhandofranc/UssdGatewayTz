@@ -22,6 +22,7 @@ import {
   setShortcodeActive, setShortcodeHandlerUrl,
   setShortcodeStatus, updateShortcode,
   type ShortcodeEnvironment, type ShortcodeStatus, type ShortcodeWrite,
+  buildShortcodeLabel, labelPartsFor, defaultSandboxOperatorId,
 } from "@/lib/shortcodes";
 import { audit, clientIp } from "@/lib/audit";
 
@@ -55,13 +56,19 @@ function boolField(fd: FormData, k: string): boolean {
   return v === "1" || v === "true" || v === "on";
 }
 
-function parseWrite(fd: FormData): { write?: ShortcodeWrite; error?: string } {
-  const operator_id   = intField(fd, "operator_id");
-  const code          = strField(fd, "code");
-  const label         = strField(fd, "label") || null;
-  // Environment: only sandbox/production; default production (SA form).
+async function parseWrite(fd: FormData): Promise<{ write?: ShortcodeWrite; error?: string }> {
+  // Environment first: it decides whether an operator was even asked for.
   const environment: ShortcodeEnvironment =
     strField(fd, "environment").toLowerCase() === "sandbox" ? "sandbox" : "production";
+  // Sandbox is network-agnostic and the form does not prompt for one, so
+  // fall back to the placeholder operator. A posted operator_id is still
+  // honoured when present, which keeps editing an existing sandbox row
+  // (whose operator is already set) from silently moving it.
+  let operator_id = intField(fd, "operator_id");
+  if (environment === "sandbox" && (!Number.isFinite(operator_id) || operator_id <= 0)) {
+    operator_id = await defaultSandboxOperatorId();
+  }
+  const code          = strField(fd, "code");
   const owner_user_id = intField(fd, "owner_user_id");
   const handler_url   = strField(fd, "handler_url");
   const auth_mode     = strField(fd, "auth_mode") as "none" | "bearer";
@@ -97,6 +104,14 @@ function parseWrite(fd: FormData): { write?: ShortcodeWrite; error?: string } {
     return { error: "status message too long (max 160 chars — MNOs truncate at session size)" };
   }
 
+  // The label is DERIVED, never taken from the form — see
+  // buildShortcodeLabel. Anything the client posted as `label` is
+  // deliberately ignored so the naming stays uniform.
+  const { ownerName, operatorDisplayName } = await labelPartsFor(owner_user_id, operator_id);
+  const label = buildShortcodeLabel({
+    ownerName, code, operatorDisplayName, environment,
+  });
+
   return {
     write: {
       operator_id, code, label, environment, owner_user_id, handler_url,
@@ -112,7 +127,7 @@ function parseWrite(fd: FormData): { write?: ShortcodeWrite; error?: string } {
 
 export async function actionCreateShortcode(fd: FormData) {
   const session = await requireAdmin();
-  const { write, error } = parseWrite(fd);
+  const { write, error } = await parseWrite(fd);
   if (error || !write) {
     return redirect(`/shortcodes/new?error=${encodeURIComponent(error || "invalid input")}`);
   }
@@ -132,7 +147,7 @@ export async function actionCreateShortcode(fd: FormData) {
 
 export async function actionUpdateShortcode(id: number, fd: FormData) {
   const session = await requireAdmin();
-  const { write, error } = parseWrite(fd);
+  const { write, error } = await parseWrite(fd);
   if (error || !write) {
     return redirect(`/shortcodes/${id}?error=${encodeURIComponent(error || "invalid input")}`);
   }
@@ -154,10 +169,12 @@ export async function actionUpdateShortcode(id: number, fd: FormData) {
 /**
  * Promote a sandbox shortcode to production (super_admin only). Clones the
  * sandbox row into a new production row — the sandbox copy stays alive for
- * continued testing. Blocked when a production (operator, code) already
- * exists, so promotion can never silently overwrite live routing.
+ * continued testing. The live network is chosen here (the sandbox row only
+ * ever held a placeholder), and the label is rebuilt around it. Blocked
+ * when a production (operator, code) already exists, so promotion can
+ * never silently overwrite live routing.
  */
-export async function actionPromoteShortcode(id: number) {
+export async function actionPromoteShortcode(id: number, operatorId: number) {
   const session = await requireAdmin();
   const sc = await getShortcode(id);
   if (!sc) {
@@ -166,16 +183,20 @@ export async function actionPromoteShortcode(id: number) {
   if (sc.environment !== "sandbox") {
     return redirect(`/shortcodes/${id}?error=${encodeURIComponent("only sandbox shortcodes can be promoted")}`);
   }
-  if (await codeExists(sc.operator_id, sc.code, "production")) {
+  if (!Number.isFinite(operatorId) || operatorId <= 0) {
+    return redirect(`/shortcodes/${id}?error=${encodeURIComponent("choose the live network to promote onto")}`);
+  }
+  if (await codeExists(operatorId, sc.code, "production")) {
     return redirect(`/shortcodes/${id}?error=${encodeURIComponent("a production shortcode with this operator+code already exists")}`);
   }
-  const newId = await promoteShortcode(id, Number(session.sub));
+  const newId = await promoteShortcode(id, operatorId, Number(session.sub));
   const meta = await reqMeta();
   await audit({
     actor: session.email, action: "shortcode.promote",
-    target: `${sc.operator_id}:${sc.code}`, outcome: "success",
+    target: `${operatorId}:${sc.code}`, outcome: "success",
     ip: meta.ip, userAgent: meta.ua,
-    detail: { sandbox_id: id, production_id: newId, handler_url: sc.handler_url },
+    detail: { sandbox_id: id, production_id: newId, operator_id: operatorId,
+              handler_url: sc.handler_url },
   });
   revalidatePath("/shortcodes");
   revalidatePath(`/shortcodes/${id}`);

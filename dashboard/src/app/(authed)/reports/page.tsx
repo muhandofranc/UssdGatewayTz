@@ -10,7 +10,7 @@
  * Bounded count (10k cap) + LIMIT/OFFSET pagination.
  */
 import Link from "next/link";
-import { getSession } from "@/lib/auth";
+import { getSession, sessionAcl } from "@/lib/auth";
 import {
   COUNT_CAP, loadBillableSummary, loadReportPage, loadShortcodeOptions,
   type ReportFilters, type ReportRow,
@@ -161,6 +161,10 @@ function Row({ r }: { r: ReportRow }) {
 export default async function ReportsPage({ searchParams }: PageProps) {
   const session = await getSession();
   if (!session) return null;
+  // Time-scoped allowlist: which shortcodes, and from when each was
+  // allocated to this user (lib/acl.ts). A re-allocated shortcode shows
+  // its new owner nothing from before the hand-over.
+  const acl = sessionAcl(session);
 
   const sp = await searchParams;
   const filters = parseFilters(sp);
@@ -178,13 +182,13 @@ export default async function ReportsPage({ searchParams }: PageProps) {
   let shortcodeOpts: Awaited<ReturnType<typeof loadShortcodeOptions>> = [];
   try {
     [pageResult, summary, shortcodeOpts] = await Promise.all([
-      loadReportPage(filters, session.shortcodeIds, page, pageSize),
-      loadBillableSummary(filters, session.shortcodeIds),
-      loadShortcodeOptions(session.shortcodeIds),
+      loadReportPage(filters, acl, page, pageSize),
+      loadBillableSummary(filters, acl),
+      loadShortcodeOptions(acl),
     ]);
   } catch (e) {
     if (!isPgTimeoutError(e)) throw e;
-    shortcodeOpts = await loadShortcodeOptions(session.shortcodeIds).catch(() => []);
+    shortcodeOpts = await loadShortcodeOptions(acl).catch(() => []);
     pageResult = { __timeout: true };
     summary    = { __timeout: true };
   }

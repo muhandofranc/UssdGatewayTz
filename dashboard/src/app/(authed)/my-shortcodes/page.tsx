@@ -13,11 +13,12 @@ import { redirect } from "next/navigation";
 import { getSession, hasPerm } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
 import {
-  listOperators, listShortcodesOwnedBy,
-  type OperatorOption, type ShortcodeRow,
+  listShortcodesOwnedBy,
+  type ShortcodeRow,
 } from "@/lib/shortcodes";
 import { actionSetShortcodeStatus, actionSetShortcodeHandlerUrl } from "../shortcodes/actions";
 import { actionCreateSandboxShortcode } from "./actions";
+import { fmtTs } from "@/lib/datetime";
 
 export default async function MyShortcodesPage({
   searchParams,
@@ -29,10 +30,9 @@ export default async function MyShortcodesPage({
   const sp = await searchParams;
 
   const canCreateSandbox = hasPerm(session, Perms.SHORTCODES_MANAGE_SANDBOX);
-  const [rows, operators] = await Promise.all([
-    listShortcodesOwnedBy(Number(session.sub)),
-    canCreateSandbox ? listOperators() : Promise.resolve([] as OperatorOption[]),
-  ]);
+  // No operator list to fetch any more: the sandbox form doesn't ask for
+  // a network, because a sandbox shortcode never reaches one.
+  const rows = await listShortcodesOwnedBy(Number(session.sub));
 
   return (
     <div className="space-y-4">
@@ -54,7 +54,7 @@ export default async function MyShortcodesPage({
         </div>
       ) : null}
 
-      {canCreateSandbox ? <CreateSandboxForm operators={operators} /> : null}
+      {canCreateSandbox ? <CreateSandboxForm /> : null}
 
       {rows.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-8 text-center text-sm text-slate-500">
@@ -79,7 +79,7 @@ export default async function MyShortcodesPage({
   );
 }
 
-function CreateSandboxForm({ operators }: { operators: OperatorOption[] }) {
+function CreateSandboxForm() {
   return (
     <details className="rounded-2xl border border-violet-200 dark:border-violet-900/50 bg-violet-50/50 dark:bg-violet-950/20 p-4">
       <summary className="cursor-pointer text-sm font-medium text-violet-800 dark:text-violet-200">
@@ -88,27 +88,15 @@ function CreateSandboxForm({ operators }: { operators: OperatorOption[] }) {
       <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">
         Sandbox shortcodes never receive live MNO traffic — you test them in the{" "}
         <Link href="/simulator" className="underline">simulator</Link>. When they
-        work, ask a Super Admin to promote to production. Limit: 2 un-promoted
-        sandbox shortcodes per operator — promote one to free a slot.
+        work, ask a Super Admin to promote to production — that is when the
+        live network is chosen. Limit: 2 un-promoted sandbox shortcodes —
+        promote one to free a slot.
       </p>
       <form action={actionCreateSandboxShortcode} className="mt-3 grid gap-3 md:grid-cols-2">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium">Operator</span>
-          <select name="operator_id" required defaultValue=""
-                  className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5">
-            <option value="" disabled>Choose…</option>
-            {operators.map((o) => <option key={o.id} value={o.id}>{o.display_name}</option>)}
-          </select>
-        </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Code</span>
           <input type="text" name="code" required maxLength={32} placeholder="*123#  or  glpair"
                  className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5 font-mono" />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium">Label</span>
-          <input type="text" name="label" maxLength={120} placeholder="Friendly name (optional)"
-                 className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5" />
         </label>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Handler timeout (seconds)</span>
@@ -145,6 +133,14 @@ function CreateSandboxForm({ operators }: { operators: OperatorOption[] }) {
 }
 
 function OwnerCard({ row: r }: { row: ShortcodeRow }) {
+  // How to name this shortcode back to its owner. Sandbox rows have no
+  // real network yet, so they are named by code alone. Plain string, not
+  // a helper function: the inline server actions below close over it, and
+  // only serialisable values may cross that boundary.
+  const scName = r.environment === "sandbox"
+    ? r.code
+    : `${r.operator_name} ${r.code}`;
+
   // Pre-fill the textarea with whatever message is currently saved so the
   // owner can edit it in place. The form posts back to the same action;
   // we encode the row id into the action so React's server-action wrapping
@@ -154,7 +150,7 @@ function OwnerCard({ row: r }: { row: ShortcodeRow }) {
     await actionSetShortcodeStatus(r.id, "active", null);
     redirect(
       "/my-shortcodes?ok=" +
-      encodeURIComponent(`${r.operator_name} ${r.code} is now active.`),
+      encodeURIComponent(`${scName} is now active.`),
     );
   };
   const goMaintenance = async (fd: FormData) => {
@@ -163,7 +159,7 @@ function OwnerCard({ row: r }: { row: ShortcodeRow }) {
     await actionSetShortcodeStatus(r.id, "maintenance", msg);
     redirect(
       "/my-shortcodes?ok=" +
-      encodeURIComponent(`${r.operator_name} ${r.code} is in maintenance.`),
+      encodeURIComponent(`${scName} is in maintenance.`),
     );
   };
   const saveHandler = async (fd: FormData) => {
@@ -172,7 +168,7 @@ function OwnerCard({ row: r }: { row: ShortcodeRow }) {
     await actionSetShortcodeHandlerUrl(r.id, url);
     redirect(
       "/my-shortcodes?ok=" +
-      encodeURIComponent(`${r.operator_name} ${r.code} handler URL updated.`),
+      encodeURIComponent(`${scName} handler URL updated.`),
     );
   };
 
@@ -181,13 +177,30 @@ function OwnerCard({ row: r }: { row: ShortcodeRow }) {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <div className="font-mono text-sm flex items-center gap-2">
-            <span><span className="text-slate-500">{r.operator_name}</span> · {r.code}</span>
+            {/* A sandbox row carries a placeholder operator until it is
+                promoted, so naming a network here would be telling the
+                owner something untrue about where their code runs. */}
+            <span>
+              <span className="text-slate-500">
+                {r.environment === "sandbox" ? "sandbox" : r.operator_name}
+              </span> · {r.code}
+            </span>
             {r.environment === "sandbox" ? (
               <span className="inline-flex items-center rounded-md bg-violet-50 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300 px-1.5 py-0.5 text-[10px] font-sans">sandbox</span>
             ) : null}
           </div>
           {r.label ? (
             <div className="text-xs text-slate-500">{r.label}</div>
+          ) : null}
+          {r.reallocated ? (
+            // This shortcode ran for someone else before it was yours.
+            // Say so plainly — otherwise the shorter history reads as
+            // lost data rather than as another client's traffic you are
+            // not entitled to see.
+            <div className="text-xs text-amber-700 dark:text-amber-400">
+              Reports show traffic from {fmtTs(r.owner_since)} — when this
+              shortcode was allocated to you.
+            </div>
           ) : null}
         </div>
         <StatusBadge row={r} />

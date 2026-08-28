@@ -20,15 +20,24 @@ export default function ShortcodeFormFields({ operators, owners, defaults }: Pro
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Operator</span>
+          {/* Not browser-`required`: a sandbox shortcode never reaches a
+              network, so leaving this unset is the correct answer there
+              and the server fills in a placeholder. Production still
+              needs one — enforced server-side, where the environment is
+              actually known. */}
           <select
-            name="operator_id" required defaultValue={d.operator_id ?? ""}
+            name="operator_id" defaultValue={d.operator_id ?? ""}
             className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5"
           >
-            <option value="" disabled>Choose…</option>
+            <option value="">Not set — sandbox only</option>
             {operators.map((o) => (
               <option key={o.id} value={o.id}>{o.display_name}</option>
             ))}
           </select>
+          <span className="text-xs text-slate-500">
+            Required for production. Leave unset for sandbox — the live
+            network is chosen when the shortcode is promoted.
+          </span>
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
@@ -45,15 +54,21 @@ export default function ShortcodeFormFields({ operators, owners, defaults }: Pro
           </span>
         </label>
 
-        <label className="flex flex-col gap-1 text-sm">
+        <div className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Label</span>
-          <input
-            type="text" name="label" maxLength={120}
-            defaultValue={d.label ?? ""}
-            placeholder="Friendly name shown in reports"
-            className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5"
-          />
-        </label>
+          {/* Generated, not typed. Shown read-only so an admin can see
+              what will be stored, but never submitted — the server
+              rebuilds it from owner + code + network on every save, so
+              a stale value here can't become the stored one. */}
+          <div className="rounded-md border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-2 py-1.5 text-slate-600 dark:text-slate-300 min-h-[2.15rem]">
+            {d.label ?? <span className="text-slate-400">Generated on save</span>}
+          </div>
+          <span className="text-xs text-slate-500">
+            Set automatically as <strong>Owner · Code · Network</strong> so
+            every label reads the same. Change the owner, code or network
+            and it is rebuilt on save.
+          </span>
+        </div>
 
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Environment</span>

@@ -10,6 +10,7 @@
  *   operators.view         list/detail operators (read-only)         [010]
  *   portal_users.view      list/detail portal users (read-only)      [010]
  *   portal_users.manage    create/edit dashboard users
+ *   archive.view           read the cold session-log archive         [028]
  *   viewers.manage_own     Admin grants read-only viewers on OWN     [010]
  *                          shortcodes; data-level scope check in
  *                          users.ts enforces "own shortcodes only"
@@ -35,6 +36,7 @@ export const Perms = {
   PORTAL_USERS_MANAGE: "portal_users.manage",
   VIEWERS_MANAGE_OWN:  "viewers.manage_own",
   AUDIT_VIEW:          "audit.view",
+  ARCHIVE_VIEW:        "archive.view",
 } as const;
 
 export type PermKey = (typeof Perms)[keyof typeof Perms];
@@ -111,6 +113,13 @@ export function requiredPermFor(pathname: string): PermKey[] | null {
   // Audit log — super_admin only (granted via db/011).
   if (pathname.startsWith("/audit") || pathname.startsWith("/api/audit")) {
     return [Perms.AUDIT_VIEW];
+  }
+  // Cold session-log archive — super_admin only (db/028). Deliberately
+  // NOT reports.view_all: auditor holds that, and the archive is every
+  // MSISDN and dialed string the platform has ever seen, including for
+  // clients who have since left.
+  if (pathname.startsWith("/archive") || pathname.startsWith("/api/archive")) {
+    return [Perms.ARCHIVE_VIEW];
   }
   // Anything else under (authed)/ → require at minimum a session
   // (any perm). Returning empty array means "must be logged in but

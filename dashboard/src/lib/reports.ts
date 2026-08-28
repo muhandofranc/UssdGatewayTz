@@ -2,20 +2,23 @@
  * Reports query builder.
  *
  * Per-shortcode access control is enforced HERE — every public
- * function takes a `shortcodeIds: number[] | null` argument lifted
- * from the JWT. `null` = unrestricted (super_admin); any array
- * (including empty) is treated as the allowlist and joined into the
- * WHERE clause via `shortcode_id = ANY($n::int[])`.
+ * function takes a `ShortcodeAcl` lifted from the JWT via
+ * `sessionAcl()`. `null` = unrestricted (super_admin); any array
+ * (including empty) is the allowlist, and each entry carries the
+ * instant that grant began, so a shortcode re-allocated to a new
+ * owner shows them only traffic from the hand-over onwards. The
+ * predicate itself is built by lib/acl.ts.
  *
- * This is the SINGLE place that turns the JWT's shortcodeIds into
- * SQL. Don't replicate the predicate elsewhere — extend this lib
- * instead, so every new report inherits the access control.
+ * This is the SINGLE place that turns the JWT's allowlist into SQL
+ * for these tables. Don't replicate the predicate elsewhere — extend
+ * this lib instead, so every new report inherits the access control.
  *
  * Pagination uses OFFSET + a bounded COUNT (capped at 10,000 — past
  * that we show "10,000+" instead of paying for a full COUNT(*) on
  * the partitioned-future ussd_session_logs).
  */
 import { query, reportQuery } from "./db";
+import { aclClause, aclDeniesAll, aclIds, aclIntersect, type ShortcodeAcl } from "./acl";
 
 export const MAX_PAGE_SIZE = 100;
 export const COUNT_CAP = 10_000;
@@ -56,24 +59,22 @@ interface BuiltClause {
  * allowlist. The first param is always the role-based allowlist
  * predicate ($1), others come from active filters.
  *
- * `allowedShortcodeIds = null` => no per-row restriction.
- * `allowedShortcodeIds = []`   => deny everything (client owns nothing).
+ * `acl = null` => no per-row restriction.
+ * `acl = []`   => deny everything (client owns nothing).
  */
 function buildWhere(
   filters: ReportFilters,
-  allowedShortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
 ): BuiltClause {
   const conds: string[] = [];
   const params: any[] = [];
   const next = (v: any) => { params.push(v); return `$${params.length}`; };
 
-  // Per-row access control — the most important predicate.
-  if (allowedShortcodeIds !== null) {
-    if (allowedShortcodeIds.length === 0) {
-      conds.push("FALSE");                              // owns nothing → no rows
-    } else {
-      conds.push(`shortcode_id = ANY(${next(allowedShortcodeIds)}::int[])`);
-    }
+  // Per-row access control — the most important predicate. Carries the
+  // per-shortcode time floor, so a re-allocated shortcode never shows
+  // its new owner the previous owner's legs.
+  if (acl !== null) {
+    conds.push(aclClause(acl, { scCol: "shortcode_id", tsCol: "ts", grain: "ts", push: next }));
   }
 
   if (filters.fromTs) conds.push(`ts >= ${next(filters.fromTs)}::timestamptz`);
@@ -86,7 +87,7 @@ function buildWhere(
   }
 
   // User-selected shortcode subset MUST intersect with the allowlist.
-  // We already restricted via allowedShortcodeIds above; this further
+  // We already restricted via the ACL above; this further
   // narrows to the user's filter choice.
   if (filters.shortcodeIds && filters.shortcodeIds.length) {
     conds.push(`shortcode_id = ANY(${next(filters.shortcodeIds)}::int[])`);
@@ -114,14 +115,14 @@ export interface ReportPage {
 
 export async function loadReportPage(
   filters: ReportFilters,
-  allowedShortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
   page: number,        // 1-indexed
   pageSize: number,
 ): Promise<ReportPage> {
   const ps = Math.max(1, Math.min(MAX_PAGE_SIZE, pageSize));
   const offset = Math.max(0, (page - 1) * ps);
 
-  const where = buildWhere(filters, allowedShortcodeIds);
+  const where = buildWhere(filters, acl);
 
   // Bounded count — LIMIT (COUNT_CAP + 1) cap. If we hit cap+1, we
   // report "totalCapped" and don't bother summing further.
@@ -188,9 +189,9 @@ export interface BillableSummary {
  */
 export async function loadBillableSummary(
   filters: ReportFilters,
-  allowedShortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
 ): Promise<BillableSummary> {
-  const where = buildWhere(filters, allowedShortcodeIds);
+  const where = buildWhere(filters, acl);
 
   // Per-(session, operator) duration, then group by operator and
   // compute totals against each operator's configured window.
@@ -289,7 +290,7 @@ export interface SessionLeg {
 export async function loadLegsForSession(
   sessionId: string,
   operatorName: string,
-  allowedShortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
   firstTs?: string,
   lastTs?: string,
 ): Promise<SessionLeg[]> {
@@ -314,10 +315,12 @@ export async function loadLegsForSession(
     "operator_name = $2",
   ];
   const params: any[] = [sessionId, operatorName];
-  if (allowedShortcodeIds !== null) {
-    if (allowedShortcodeIds.length === 0) return [];
-    params.push(allowedShortcodeIds);
-    conds.push(`shortcode_id = ANY($${params.length}::int[])`);
+  if (acl !== null) {
+    if (aclDeniesAll(acl)) return [];
+    conds.push(aclClause(acl, {
+      scCol: "shortcode_id", tsCol: "ts", grain: "ts",
+      push: (v) => { params.push(v); return `$${params.length}`; },
+    }));
   }
   if (firstTs) {
     params.push(firstTs);
@@ -399,7 +402,7 @@ export interface SessionPage {
  */
 async function tryRollupBoundedCount(
   filters: ReportFilters,
-  allowedShortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
 ): Promise<number | null> {
   if (filters.msisdn) return null;
   if (filters.sessionId) return null;
@@ -414,12 +417,10 @@ async function tryRollupBoundedCount(
   const today = new Date().toISOString().slice(0, 10);
   if (filters.toTs >= today) return null;
 
-  // If allowedShortcodeIds is null → user has global report perms,
-  // no shortcode restriction. If it's an empty array → the caller
-  // has NO shortcodes granted; return 0 without hitting the DB.
-  if (allowedShortcodeIds !== null && allowedShortcodeIds.length === 0) {
-    return 0;
-  }
+  // If acl is null → user has global report perms, no shortcode
+  // restriction. If it's an empty array → the caller has NO shortcodes
+  // granted; return 0 without hitting the DB.
+  if (aclDeniesAll(acl)) return 0;
 
   const params: any[] = [];
   const next = (v: any) => { params.push(v); return `$${params.length}`; };
@@ -436,16 +437,18 @@ async function tryRollupBoundedCount(
     );
   }
   // Intersect the user-selected shortcode filter with the RBAC allow-
-  // list. If the user picked shortcodes, use those; else fall back to
-  // the allowlist alone; else no shortcode narrowing at all.
-  const scFilter = filters.shortcodeIds && filters.shortcodeIds.length
-    ? filters.shortcodeIds.filter(
-        (id) => allowedShortcodeIds === null || allowedShortcodeIds.includes(id),
-      )
-    : allowedShortcodeIds;
+  // list, keeping each grant's time floor. If the user picked
+  // shortcodes, use those; else fall back to the allowlist alone; else
+  // no shortcode narrowing at all.
+  const scFilter = aclIntersect(acl, filters.shortcodeIds ?? []);
   if (scFilter !== null) {
     if (scFilter.length === 0) return 0;
-    conds.push(`d.shortcode_id = ANY(${next(scFilter)}::int[])`);
+    // "date" grain: the rollup stores whole days, so a hand-over
+    // part-way through one moves the floor to the next day rather than
+    // counting a bucket that also holds the previous owner's sessions.
+    conds.push(aclClause(scFilter, {
+      scCol: "d.shortcode_id", tsCol: "d.date", grain: "date", push: next,
+    }));
   }
 
   const sql = `
@@ -467,13 +470,13 @@ async function tryRollupBoundedCount(
 
 export async function loadSessionPage(
   filters: ReportFilters,
-  allowedShortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
   page: number,
   pageSize: number,
 ): Promise<SessionPage> {
   const ps = Math.max(1, Math.min(MAX_PAGE_SIZE, pageSize));
   const offset = Math.max(0, (page - 1) * ps);
-  const where = buildWhere(filters, allowedShortcodeIds);
+  const where = buildWhere(filters, acl);
 
   // Bounded count of DISTINCT sessions matching the filter set. Two
   // paths: FAST via daily_session_summary (db/015) when the filter
@@ -486,7 +489,7 @@ export async function loadSessionPage(
   // the pre-aggregate (msisdn, sessionId, specific error class),
   // OR when the window includes today (rollup only covers past
   // days per db/015).
-  const rollupCount = await tryRollupBoundedCount(filters, allowedShortcodeIds);
+  const rollupCount = await tryRollupBoundedCount(filters, acl);
   let totalKnown: number;
   let totalCapped: boolean;
   if (rollupCount !== null) {
@@ -598,15 +601,15 @@ export interface ShortcodeOption {
 }
 
 export async function loadShortcodeOptions(
-  allowedShortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
 ): Promise<ShortcodeOption[]> {
-  if (allowedShortcodeIds !== null && allowedShortcodeIds.length === 0) {
-    return [];
-  }
-  const where = allowedShortcodeIds === null
-    ? ""
-    : "WHERE s.id = ANY($1::int[])";
-  const params = allowedShortcodeIds === null ? [] : [allowedShortcodeIds];
+  // A picker over the shortcodes themselves — no traffic rows, so the
+  // time floor doesn't apply here: the caller still owns the shortcode
+  // and must be able to select it.
+  if (aclDeniesAll(acl)) return [];
+  const ids = aclIds(acl);
+  const where  = ids === null ? "" : "WHERE s.id = ANY($1::int[])";
+  const params = ids === null ? [] : [ids];
 
   const r = await query<ShortcodeOption>(
     `SELECT s.id, o.name AS operator_name, s.code, s.label

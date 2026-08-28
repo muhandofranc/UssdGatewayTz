@@ -17,12 +17,13 @@
  * for today reflects the last refresh; once the cron next fires, the
  * page picks up the new numbers on its next render.
  *
- * Per-row access control is the same `shortcode_id = ANY(int[])`
+ * Per-row access control is the same time-scoped allowlist
  * pattern the rest of the dashboard uses. shortcodeIds=null →
  * unrestricted (super_admin / auditor); [] → nothing (caller owns
  * none); [...] → intersection.
  */
 import { query } from "./db";
+import { aclClause, aclDeniesAll, type ShortcodeAcl } from "./acl";
 
 export interface DailyTrafficRow {
   /** YYYY-MM-DD, Africa/Nairobi local day. */
@@ -32,24 +33,30 @@ export interface DailyTrafficRow {
 }
 
 export async function loadDailyTraffic(
-  shortcodeIds: number[] | null,
+  acl: ShortcodeAcl,
   monthYM: string,           // 'YYYY-MM'
 ): Promise<DailyTrafficRow[]> {
-  // ACL predicate against shortcode_id — same shape in both source
-  // tables. Empty allowlist returns nothing (per-row deny via FALSE).
-  if (shortcodeIds !== null && shortcodeIds.length === 0) return [];
-  const scClause = shortcodeIds === null
-    ? "TRUE"
-    : "shortcode_id = ANY($SC::int[])";
+  // ACL predicate — empty allowlist returns nothing without a query.
+  if (aclDeniesAll(acl)) return [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const params: any[] = [];
-  if (shortcodeIds !== null) params.push(shortcodeIds);
-  params.push(`${monthYM}-01`);            // monthStart
-  const monthIx = params.length;            // $1 or $2
+  const push = (v: unknown) => { params.push(v); return `$${params.length}`; };
 
-  // Substitute the placeholder index for the shortcode array.
-  const acl = shortcodeIds === null ? "TRUE" : scClause.replace("$SC", "$1");
+  // Both sources are day-grained, so the ACL's time floor rounds up to
+  // a whole day (see lib/acl.ts). The two CTEs below read different
+  // tables but need the identical predicate, so build it once and
+  // re-alias — building it twice would push the same arrays as a second
+  // set of parameters for no reason.
+  const pastAcl  = aclClause(acl, {
+    scCol: "d.shortcode_id", tsCol: "d.date", grain: "date", push,
+  });
+  const todayAcl = pastAcl
+    .split("d.shortcode_id").join("m.shortcode_id")
+    .split("d.date").join("m.date");
+
+  params.push(`${monthYM}-01`);            // monthStart
+  const monthIx = params.length;
 
   // Past days: read from the nightly rollup. d.date < today (EAT).
   // Today: read from the today MV.
@@ -66,7 +73,7 @@ export async function loadDailyTraffic(
          WHERE d.date >= $${monthIx}::date
            AND d.date <  ($${monthIx}::date + interval '1 month')::date
            AND d.date <  (now() AT TIME ZONE 'Africa/Nairobi')::date
-           AND ${acl}
+           AND ${pastAcl}
          GROUP BY d.date, o.name
     ),
     today AS (
@@ -77,7 +84,7 @@ export async function loadDailyTraffic(
           JOIN operators o ON o.id = m.operator_id
          WHERE m.date >= $${monthIx}::date
            AND m.date <  ($${monthIx}::date + interval '1 month')::date
-           AND ${acl}
+           AND ${todayAcl}
          GROUP BY m.date, o.name
     )
     SELECT day, operator_name, SUM(billable_units)::bigint AS billable_units

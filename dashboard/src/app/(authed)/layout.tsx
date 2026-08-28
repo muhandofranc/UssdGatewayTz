@@ -69,6 +69,12 @@ export default async function AuthedLayout({
   if (hasPerm(session, Perms.AUDIT_VIEW)) {
     items.push({ href: "/audit", label: "Audit log", icon: "audit", matchPrefix: "/audit" });
   }
+  // Cold session-log archive — super_admin only (db/028). Sits last:
+  // it reads data every other page treats as gone, so it should read as
+  // a deliberate detour rather than another report.
+  if (hasPerm(session, Perms.ARCHIVE_VIEW)) {
+    items.push({ href: "/archive", label: "Archive", icon: "archive", matchPrefix: "/archive" });
+  }
 
   // Up-to-2-letter avatar initials from the display name.
   const initials =

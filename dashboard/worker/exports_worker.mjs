@@ -124,13 +124,32 @@ function buildWhere(filters) {
   const params = [];
   const push = (v) => { params.push(v); return `$${params.length}`; };
 
-  // Per-row access control.
+  // Per-row access control. `allowedShortcodeFrom` is index-aligned
+  // with the id list and holds the unix second each grant began — the
+  // date the shortcode was allocated to the requester. Rows older than
+  // that belong to whoever owned the shortcode before them, so they are
+  // excluded here exactly as they are on-screen (mirrors the grouping
+  // in dashboard/src/lib/acl.ts aclClause). A filter row enqueued
+  // before this field existed has no floors and behaves as it did then.
   const allow = filters.allowedShortcodeIds;
   if (allow !== null && allow !== undefined) {
     if (!Array.isArray(allow) || allow.length === 0) {
       conds.push("FALSE");
     } else {
-      conds.push(`shortcode_id = ANY(${push(allow)}::int[])`);
+      const from = Array.isArray(filters.allowedShortcodeFrom)
+        ? filters.allowedShortcodeFrom : [];
+      const byFrom = new Map();
+      allow.forEach((id, i) => {
+        const f = Number(from[i]) || 0;
+        const arr = byFrom.get(f);
+        if (arr) arr.push(id); else byFrom.set(f, [id]);
+      });
+      const branches = [];
+      for (const [f, ids] of byFrom) {
+        const idsP = `shortcode_id = ANY(${push(ids)}::int[])`;
+        branches.push(f > 0 ? `(${idsP} AND ts >= to_timestamp(${push(f)}))` : idsP);
+      }
+      conds.push(branches.length === 1 ? branches[0] : `(${branches.join(" OR ")})`);
     }
   }
 
