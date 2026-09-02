@@ -18,6 +18,10 @@ export interface EditProps {
 
 /** Heading text, also the dialog's accessible label. */
 export async function userEditTitle(id: number): Promise<string> {
+  // The @modal interceptor calls this before the component below
+  // runs its own guard, so a non-numeric id would otherwise reach
+  // Postgres as NaN and blow up with `invalid input syntax`.
+  if (!Number.isFinite(id)) return "Edit user";
   const u = await getUser(id);
   return u ? `Edit user ${u.email}` : "Edit user";
 }

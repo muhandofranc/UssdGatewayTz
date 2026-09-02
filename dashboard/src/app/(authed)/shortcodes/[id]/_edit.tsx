@@ -26,6 +26,10 @@ export interface EditProps {
 
 /** Heading text, also used as the dialog's accessible label. */
 export async function shortcodeEditTitle(id: number): Promise<string> {
+  // The @modal interceptor calls this before the component below
+  // runs its own guard, so a non-numeric id would otherwise reach
+  // Postgres as NaN and blow up with `invalid input syntax`.
+  if (!Number.isFinite(id)) return "Edit shortcode";
   const row = await getShortcode(id);
   return row ? `Edit shortcode ${row.operator_name}/${row.code}` : "Edit shortcode";
 }

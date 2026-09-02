@@ -19,6 +19,10 @@ export interface EditProps {
 
 /** Heading text, also the dialog's accessible label. */
 export async function operatorEditTitle(id: number): Promise<string> {
+  // The @modal interceptor calls this before the component below
+  // runs its own guard, so a non-numeric id would otherwise reach
+  // Postgres as NaN and blow up with `invalid input syntax`.
+  if (!Number.isFinite(id)) return "Edit operator";
   const op = await getOperator(id);
   return op ? `Edit operator ${op.name}` : "Edit operator";
 }
