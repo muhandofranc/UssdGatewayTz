@@ -235,6 +235,17 @@ export default async function ShortcodesPage({
                       legacy payload
                     </div>
                   ) : null}
+                  {r.verify_tls === false ? (
+                    // Security exception — must be visible from the list, not
+                    // only from inside the edit form, so it gets noticed and
+                    // revisited rather than quietly outliving its reason.
+                    <div
+                      className="text-[10px] text-red-700 dark:text-red-400 font-sans font-medium"
+                      title="TLS certificate verification is DISABLED for this handler (db/031)"
+                    >
+                      TLS unverified
+                    </div>
+                  ) : null}
                 </td>
                 <td className="px-2 py-1.5 text-xs text-right tabular-nums">{r.timeout_secs}s</td>
                 <td className="px-2 py-1.5 text-xs">

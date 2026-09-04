@@ -51,6 +51,12 @@ export interface ShortcodeRow {
   status_set_by_email: string | null;
   status_set_at: string | null;
   payload_format: ShortcodePayloadFormat;
+  /**
+   * FALSE skips TLS certificate verification on the handler call (db/031).
+   * super_admin only, and a real security reduction for that shortcode —
+   * see the migration.
+   */
+  verify_tls: boolean;
   created_at: string;
   updated_at: string;
   /** When the current owner was given this shortcode (db/025). */
@@ -80,7 +86,7 @@ const SHORTCODE_SELECT = `
            s.timeout_secs, s.active,
            s.status, s.status_message,
            s.status_set_by_id,
-           s.payload_format,
+           s.payload_format, s.verify_tls,
            sb.email AS status_set_by_email,
            s.status_set_at::text,
            s.created_at::text, s.updated_at::text,
@@ -271,6 +277,7 @@ export interface ShortcodeWrite {
   status: ShortcodeStatus;
   status_message: string | null;
   payload_format: ShortcodePayloadFormat;
+  verify_tls: boolean;
 }
 
 export async function createShortcode(
@@ -283,13 +290,13 @@ export async function createShortcode(
        (operator_id, code, label, environment, owner_user_id, handler_url,
         auth_mode, bearer_token, timeout_secs, active,
         status, status_message, status_set_by_id, status_set_at,
-        payload_format)
+        payload_format, verify_tls)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-             $11, $12, $13, now(), $14)
+             $11, $12, $13, now(), $14, $15)
      RETURNING id`,
     [w.operator_id, w.code, w.label, w.environment, w.owner_user_id, w.handler_url,
      w.auth_mode, w.bearer_token, w.timeout_secs, active,
-     w.status, w.status_message, byUserId, w.payload_format],
+     w.status, w.status_message, byUserId, w.payload_format, w.verify_tls],
   );
   return r.rows[0]!.id;
 }
@@ -325,13 +332,16 @@ export async function promoteShortcode(
        (operator_id, code, label, environment, owner_user_id, handler_url,
         auth_mode, bearer_token, timeout_secs, active,
         status, status_message, status_set_by_id, status_set_at,
-        payload_format)
+        payload_format, verify_tls)
      -- payload_format carries over: a sandbox row was tested against the
      -- handler in whichever body shape that handler speaks, and promoting
      -- it must not silently switch the shape out from under a client.
+     -- verify_tls deliberately does NOT: it is reset to TRUE so a
+     -- certificate exception granted for a test box has to be granted
+     -- again, explicitly, before it ever applies to live traffic.
      SELECT $3, code, $4, 'production', owner_user_id, handler_url,
             auth_mode, bearer_token, timeout_secs, TRUE,
-            'active', NULL, $2, now(), payload_format
+            'active', NULL, $2, now(), payload_format, TRUE
        FROM shortcodes
       WHERE id = $1 AND environment = 'sandbox'
      RETURNING id`,
@@ -354,12 +364,12 @@ export async function updateShortcode(
             timeout_secs = $9, active = $10,
             status = $11, status_message = $12,
             status_set_by_id = $13, status_set_at = now(),
-            payload_format = $14,
+            payload_format = $14, verify_tls = $15,
             updated_at = now()
       WHERE id = $1`,
     [id, w.operator_id, w.code, w.label, w.owner_user_id, w.handler_url,
      w.auth_mode, w.bearer_token, w.timeout_secs, active,
-     w.status, w.status_message, byUserId, w.payload_format],
+     w.status, w.status_message, byUserId, w.payload_format, w.verify_tls],
   );
 }
 

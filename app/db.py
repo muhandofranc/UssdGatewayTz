@@ -106,6 +106,10 @@ class ShortcodeRow:
     #               serviceCode, UssdString} shape, for clients whose
     #               handlers predate this gateway.
     payload_format: str = "gateway"
+    # FALSE skips certificate verification on the handler call
+    # (migration 031). Default True -- see that migration for the narrow
+    # case this exists for and why it is scoped per-shortcode.
+    verify_tls: bool = True
 
 
 def resolve_shortcode(operator_name: str, code: str) -> Optional[ShortcodeRow]:
@@ -126,7 +130,7 @@ def resolve_shortcode(operator_name: str, code: str) -> Optional[ShortcodeRow]:
                s.code, s.owner_user_id, s.handler_url,
                s.auth_mode, s.bearer_token, s.timeout_secs,
                s.active, s.status, s.status_message,
-               s.payload_format
+               s.payload_format, s.verify_tls
           FROM shortcodes s
           JOIN operators  o ON o.id = s.operator_id
          WHERE o.name = %s AND s.code = %s

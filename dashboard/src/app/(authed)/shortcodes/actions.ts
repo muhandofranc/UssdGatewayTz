@@ -92,6 +92,11 @@ async function parseWrite(fd: FormData): Promise<{ write?: ShortcodeWrite; error
   // than switching a client's handler contract by omission.
   const payload_format: ShortcodePayloadFormat =
     strField(fd, "payload_format").toLowerCase() === "legacy" ? "legacy" : "gateway";
+  // TLS verification (db/031). Read as "must the box be TICKED to switch
+  // it OFF" — an unchecked box, an absent field, or a form that never
+  // rendered the control all leave verification ON. Security-relevant
+  // defaults must never depend on a field being present.
+  const verify_tls = !boolField(fd, "skip_tls_verify");
 
   if (!Number.isFinite(operator_id) || operator_id <= 0)  return { error: "operator is required" };
   if (!code)                                              return { error: "code is required" };
@@ -127,6 +132,7 @@ async function parseWrite(fd: FormData): Promise<{ write?: ShortcodeWrite; error
       timeout_secs,
       status, status_message,
       payload_format,
+      verify_tls,
     },
   };
 }

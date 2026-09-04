@@ -169,12 +169,35 @@ export default function ShortcodeFormFields({ operators, owners, defaults }: Pro
             Pick <b>legacy</b> only for a client whose handler predates this
             gateway and still expects{" "}
             <code>sessionId, msisdn, networkProvider, serviceCode, UssdString</code>
-            {" "}— note that shape&apos;s <code>serviceCode</code> carries the whole
-            dialled string with the user&apos;s inputs spliced in, and{" "}
-            <code>networkProvider</code> is the operator name upper-cased
+            {" "}— that shape carries the same <code>serviceCode</code> and
+            menu trail the unified body does, just under different key
+            names, and <code>networkProvider</code> is the operator name upper-cased
             (<code>VODACOM</code>, <code>AIRTEL</code>, <code>TIGO</code>,{" "}
             <code>HALOTEL</code>). The reply contract (<code>CON …</code> /{" "}
             <code>END …</code>) is identical either way.
+          </span>
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">TLS certificate verification</span>
+          <span className="flex items-center gap-2">
+            <input
+              type="checkbox" name="skip_tls_verify" value="1"
+              defaultChecked={d.verify_tls === false}
+              className="h-4 w-4 rounded border-slate-300 dark:border-slate-700"
+            />
+            <span>Skip verification for this handler</span>
+          </span>
+          <span className="text-xs text-amber-700 dark:text-amber-400">
+            Leave unticked. Ticking it means the gateway will accept{" "}
+            <b>any</b> certificate from this handler, so that leg can be
+            intercepted — and USSD legs carry the subscriber&apos;s MSISDN and
+            menu choices. Use it only as a temporary accommodation for a
+            handler behind an appliance still serving a placeholder
+            certificate (a Kong box with its stock{" "}
+            <code>CN=localhost</code> cert, say), where no trust-store change
+            can help because the name doesn&apos;t match the address either.
+            The real fix is a certificate valid for the address you call.
           </span>
         </label>
 

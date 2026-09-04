@@ -96,6 +96,9 @@ export async function actionCreateSandboxShortcode(fd: FormData) {
       // /shortcodes form (db/030) -- this form must never offer it, or a
       // client could point a brand-new handler at a deprecated contract.
       payload_format: "gateway",
+      // Certificate verification is never negotiable from the client-facing
+      // form. Waiving it is a super_admin exception on /shortcodes (db/031).
+      verify_tls: true,
     },
     Number(session.sub),
   );

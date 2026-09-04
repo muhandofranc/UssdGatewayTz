@@ -20,7 +20,7 @@ Contract for handlers (internal apps OR external clients):
                   "sessionId":       "ABC123",
                   "msisdn":          "255712345678",
                   "networkProvider": "VODACOM",
-                  "serviceCode":     "*123*1*2#",   # dialled string, inputs spliced in
+                  "serviceCode":     "*123#",       # as dialled; trail is in UssdString
                   "UssdString":      "1*2"
                 }
               Same URL, same application/json, same CON/END reply --
@@ -100,6 +100,11 @@ LOGGER = logging.getLogger(__name__)
 # the client's default).
 _CLIENT: Optional[httpx.AsyncClient] = None
 
+# Second pool for shortcodes with verify_tls=false (db/031). `verify` is a
+# client-level setting in httpx, so opting one shortcode out needs its own
+# client rather than a per-request flag. Created lazily by _client_for().
+_CLIENT_NOVERIFY: Optional[httpx.AsyncClient] = None
+
 
 def _int_env(name: str, default: int) -> int:
     """Best-effort env lookup for connection-pool sizing knobs."""
@@ -124,14 +129,7 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
-def init_forwarder() -> None:
-    """Create the shared AsyncClient at app startup. Idempotent so
-    the FastAPI lifespan hook can call this on reload without leaking
-    a client."""
-    global _CLIENT
-    if _CLIENT is not None:
-        return
-
+def _new_client(*, verify: bool) -> httpx.AsyncClient:
     # Pool caps — tuned for the "single host, 4 MNOs × N shortcodes"
     # deployment. Env overrides let ops widen these without a rebuild
     # on a bigger box.
@@ -139,7 +137,7 @@ def init_forwarder() -> None:
     max_keepalive = _int_env("USSD_HTTPX_MAX_KEEPALIVE_CONNECTIONS", 100)
     keepalive_ttl = _float_env("USSD_HTTPX_KEEPALIVE_EXPIRY_SECS",    30.0)
 
-    _CLIENT = httpx.AsyncClient(
+    return httpx.AsyncClient(
         limits=httpx.Limits(
             max_connections=max_conn,
             max_keepalive_connections=max_keepalive,
@@ -156,26 +154,60 @@ def init_forwarder() -> None:
         # No transport retries: we count each attempt in metrics and
         # decide our own retry policy in the caller (which today is
         # "just fail the leg" — that's fine).
-        transport=httpx.AsyncHTTPTransport(retries=0),
+        transport=httpx.AsyncHTTPTransport(retries=0, verify=verify),
+        verify=verify,
     )
-    LOGGER.info(
-        "forwarder httpx client ready max_conn=%d max_keepalive=%d expiry=%.1fs",
-        max_conn, max_keepalive, keepalive_ttl,
-    )
+
+
+def init_forwarder() -> None:
+    """Create the shared AsyncClient at app startup. Idempotent so
+    the FastAPI lifespan hook can call this on reload without leaking
+    a client."""
+    global _CLIENT
+    if _CLIENT is not None:
+        return
+    _CLIENT = _new_client(verify=True)
+    LOGGER.info("forwarder httpx client ready (verify=on)")
+
+
+def _client_for(sc: ShortcodeRow) -> httpx.AsyncClient:
+    """Pick the pooled client for this shortcode's TLS policy.
+
+    `verify` is fixed per httpx client, not per request, so a shortcode
+    with verification disabled (db/031) needs its own pool. It is built
+    lazily and only ever when such a shortcode actually sends: a
+    deployment where nobody has opted out never creates it at all.
+    """
+    global _CLIENT_NOVERIFY
+    if getattr(sc, "verify_tls", True):
+        assert _CLIENT is not None
+        return _CLIENT
+    if _CLIENT_NOVERIFY is None:
+        # Loud, once per process: this is a real security reduction and
+        # should be traceable to the shortcode that asked for it.
+        LOGGER.warning(
+            "shortcode=%s has verify_tls=false — creating an UNVERIFIED "
+            "TLS pool; the handler leg for this shortcode is no longer "
+            "protected against interception (db/031)", sc.code,
+        )
+        _CLIENT_NOVERIFY = _new_client(verify=False)
+    return _CLIENT_NOVERIFY
 
 
 async def close_forwarder() -> None:
-    """Drain and close the shared client at shutdown."""
-    global _CLIENT
-    if _CLIENT is None:
-        return
-    try:
-        await _CLIENT.aclose()
-    except Exception:
-        LOGGER.exception("forwarder client close failed")
-    finally:
-        _CLIENT = None
-        LOGGER.info("forwarder httpx client closed")
+    """Drain and close the shared clients at shutdown."""
+    global _CLIENT, _CLIENT_NOVERIFY
+    for name in ("_CLIENT", "_CLIENT_NOVERIFY"):
+        client = globals().get(name)
+        if client is None:
+            continue
+        try:
+            await client.aclose()
+        except Exception:
+            LOGGER.exception("forwarder client close failed (%s)", name)
+        finally:
+            globals()[name] = None
+    LOGGER.info("forwarder httpx clients closed")
 
 
 def sample_pool_gauges() -> None:
@@ -275,28 +307,6 @@ def _parse_handler_reply(status: int, body_text: str) -> tuple[UnifiedReply | No
 # Handler payload shapes
 # ------------------------------------------------------------------
 
-def _legacy_service_code(service_code: str, ussd_string: str) -> str:
-    """Rebuild the fully-dialled string the pre-gateway handlers expect.
-
-    Those handlers were integrated aggregator-direct, where `serviceCode`
-    carried the WHOLE dialled string including the user's menu inputs --
-    not the bare shortcode. The PHP senders reconstruct it by stripping
-    the trailing '#' and splicing the input trail back in:
-
-        *149*76#  +  ussd_string ''      ->  *149*76#      (opening leg)
-        *149*76#  +  ussd_string '1'     ->  *149*76*1#
-        *149*76#  +  ussd_string '1*2'   ->  *149*76*1*2#
-
-    Sending the bare shortcode on every leg instead would look to those
-    handlers like the user re-dialled from the top each time, so this is
-    load-bearing, not cosmetic. Mirrors
-    /var/www/html/jubileetigo/index_patch.php.
-    """
-    if not ussd_string:
-        return service_code
-    return f"{service_code.rstrip('#')}*{ussd_string}#"
-
-
 def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
     """The JSON body POSTed to this shortcode's handler.
 
@@ -321,8 +331,15 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
             # second, so it stays 'tigo' -> 'TIGO' here; changing the wire
             # value is an operator rename, not a per-shortcode option.
             "networkProvider": (ur.operator or "").upper(),
-            "serviceCode":     _legacy_service_code(ur.service_code,
-                                                    ur.ussd_string),
+            # The dialled service code exactly as the gateway resolved it
+            # -- the same value the unified body carries in
+            # `service_code`. The pre-gateway PHP senders spliced the
+            # input trail into this field
+            # (*149*76# + '1*2' -> *149*76*1*2#), but the trail already
+            # travels in `UssdString` and handlers navigate from that, so
+            # we keep one consistent meaning for the field across both
+            # payload shapes.
+            "serviceCode":     ur.service_code,
             "UssdString":      ur.ussd_string,
         }
 
@@ -383,6 +400,7 @@ async def forward(
         LOGGER.warning("forwarder client uninitialised; using one-shot fallback")
         init_forwarder()
     assert _CLIENT is not None  # narrow for type-checkers
+    client = _client_for(sc)
 
     # Metric labels — bounded cardinality by construction (shortcode
     # values are enumerated in the DB, event has three values). We
@@ -394,7 +412,7 @@ async def forward(
     USSD_HOP_TOTAL.labels(_lbl_op, _lbl_sc, _lbl_ev).inc()
 
     try:
-        resp = await _CLIENT.post(
+        resp = await client.post(
             sc.handler_url, json=payload, headers=headers,
             timeout=timeout,   # per-shortcode override
         )

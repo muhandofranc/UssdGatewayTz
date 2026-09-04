@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.db import ShortcodeRow                        # noqa: E402
-from app.forwarder import build_handler_payload, _legacy_service_code  # noqa: E402
+from app.forwarder import build_handler_payload  # noqa: E402
 from app.unified import SessionEvent, UnifiedRequest   # noqa: E402
 
 
@@ -70,19 +70,20 @@ def test_legacy_omits_gateway_only_fields():
         assert k not in p
 
 
-def test_legacy_service_code_splices_the_input_trail():
-    """serviceCode carries the WHOLE dialled string, not the shortcode."""
-    assert _legacy_service_code("*149*76#", "") == "*149*76#"
-    assert _legacy_service_code("*149*76#", "1") == "*149*76*1#"
-    assert _legacy_service_code("*149*76#", "1*2") == "*149*76*1*2#"
-    # a code stored without the trailing '#' still produces one
-    assert _legacy_service_code("*149*76", "1") == "*149*76*1#"
+def test_legacy_service_code_is_the_dialled_code_unchanged():
+    """serviceCode carries what the gateway resolved, on every leg -- the
+    same value the unified body puts in `service_code`. The input trail
+    travels in UssdString; it is deliberately NOT spliced in here."""
+    for trail in ("", "1", "1*2"):
+        p = build_handler_payload(_sc(payload_format="legacy"), _ur(trail))
+        assert p["serviceCode"] == "*149*76#"
+        assert p["UssdString"] == trail
 
 
-def test_legacy_opening_leg_keeps_the_dialled_code_untouched():
-    p = build_handler_payload(_sc(payload_format="legacy"), _ur(""))
-    assert p["serviceCode"] == "*149*76#"
-    assert p["UssdString"] == ""
+def test_legacy_service_code_matches_the_gateway_body():
+    legacy = build_handler_payload(_sc(payload_format="legacy"), _ur("1*2"))
+    unified = build_handler_payload(_sc(), _ur("1*2"))
+    assert legacy["serviceCode"] == unified["service_code"]
 
 
 def test_network_provider_defaults_to_uppercase_operator():
