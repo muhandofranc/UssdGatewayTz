@@ -155,6 +155,30 @@ export default function ShortcodeFormFields({ operators, owners, defaults }: Pro
         </label>
 
         <label className="flex flex-col gap-1 text-sm">
+          <span className="font-medium">Handler payload format</span>
+          <select
+            name="payload_format" defaultValue={d.payload_format ?? "gateway"}
+            className="rounded-md border border-slate-300 dark:border-slate-700 bg-transparent px-2 py-1.5"
+          >
+            <option value="gateway">gateway — unified (default, use for new clients)</option>
+            <option value="legacy">legacy — pre-gateway shape</option>
+          </select>
+          <span className="text-xs text-slate-500">
+            What the gateway POSTs to the handler URL. <b>gateway</b> sends the
+            unified body (<code>operator, session_id, ussd_string, event, …</code>).
+            Pick <b>legacy</b> only for a client whose handler predates this
+            gateway and still expects{" "}
+            <code>sessionId, msisdn, networkProvider, serviceCode, UssdString</code>
+            {" "}— note that shape&apos;s <code>serviceCode</code> carries the whole
+            dialled string with the user&apos;s inputs spliced in, and{" "}
+            <code>networkProvider</code> is the operator name upper-cased
+            (<code>VODACOM</code>, <code>AIRTEL</code>, <code>TIGO</code>,{" "}
+            <code>HALOTEL</code>). The reply contract (<code>CON …</code> /{" "}
+            <code>END …</code>) is identical either way.
+          </span>
+        </label>
+
+        <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Handler timeout (seconds)</span>
           <input
             type="number" name="timeout_secs" min={1} max={30} required

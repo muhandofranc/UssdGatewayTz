@@ -19,6 +19,17 @@ export type ShortcodeStatus = "active" | "maintenance" | "deactivated";
 // the routable environment.
 export type ShortcodeEnvironment = "sandbox" | "production";
 
+/**
+ * Body shape the gateway POSTs to `handler_url` (db/030).
+ *   gateway — unified snake_case {operator, session_id, ussd_string, …}
+ *   legacy  — pre-gateway {sessionId, msisdn, networkProvider,
+ *             serviceCode, UssdString}, for clients whose handlers were
+ *             built against their old aggregator-direct integration.
+ * Only super_admin (Perms.SHORTCODES_MANAGE) can change it; the
+ * owner-facing /my-shortcodes form never writes it.
+ */
+export type ShortcodePayloadFormat = "gateway" | "legacy";
+
 export interface ShortcodeRow {
   id: number;
   operator_id: number;
@@ -39,6 +50,7 @@ export interface ShortcodeRow {
   status_set_by_id: number | null;
   status_set_by_email: string | null;
   status_set_at: string | null;
+  payload_format: ShortcodePayloadFormat;
   created_at: string;
   updated_at: string;
   /** When the current owner was given this shortcode (db/025). */
@@ -68,6 +80,7 @@ const SHORTCODE_SELECT = `
            s.timeout_secs, s.active,
            s.status, s.status_message,
            s.status_set_by_id,
+           s.payload_format,
            sb.email AS status_set_by_email,
            s.status_set_at::text,
            s.created_at::text, s.updated_at::text,
@@ -257,6 +270,7 @@ export interface ShortcodeWrite {
   timeout_secs: number;
   status: ShortcodeStatus;
   status_message: string | null;
+  payload_format: ShortcodePayloadFormat;
 }
 
 export async function createShortcode(
@@ -268,13 +282,14 @@ export async function createShortcode(
     `INSERT INTO shortcodes
        (operator_id, code, label, environment, owner_user_id, handler_url,
         auth_mode, bearer_token, timeout_secs, active,
-        status, status_message, status_set_by_id, status_set_at)
+        status, status_message, status_set_by_id, status_set_at,
+        payload_format)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-             $11, $12, $13, now())
+             $11, $12, $13, now(), $14)
      RETURNING id`,
     [w.operator_id, w.code, w.label, w.environment, w.owner_user_id, w.handler_url,
      w.auth_mode, w.bearer_token, w.timeout_secs, active,
-     w.status, w.status_message, byUserId],
+     w.status, w.status_message, byUserId, w.payload_format],
   );
   return r.rows[0]!.id;
 }
@@ -309,10 +324,14 @@ export async function promoteShortcode(
     `INSERT INTO shortcodes
        (operator_id, code, label, environment, owner_user_id, handler_url,
         auth_mode, bearer_token, timeout_secs, active,
-        status, status_message, status_set_by_id, status_set_at)
+        status, status_message, status_set_by_id, status_set_at,
+        payload_format)
+     -- payload_format carries over: a sandbox row was tested against the
+     -- handler in whichever body shape that handler speaks, and promoting
+     -- it must not silently switch the shape out from under a client.
      SELECT $3, code, $4, 'production', owner_user_id, handler_url,
             auth_mode, bearer_token, timeout_secs, TRUE,
-            'active', NULL, $2, now()
+            'active', NULL, $2, now(), payload_format
        FROM shortcodes
       WHERE id = $1 AND environment = 'sandbox'
      RETURNING id`,
@@ -335,11 +354,12 @@ export async function updateShortcode(
             timeout_secs = $9, active = $10,
             status = $11, status_message = $12,
             status_set_by_id = $13, status_set_at = now(),
+            payload_format = $14,
             updated_at = now()
       WHERE id = $1`,
     [id, w.operator_id, w.code, w.label, w.owner_user_id, w.handler_url,
      w.auth_mode, w.bearer_token, w.timeout_secs, active,
-     w.status, w.status_message, byUserId],
+     w.status, w.status_message, byUserId, w.payload_format],
   );
 }
 

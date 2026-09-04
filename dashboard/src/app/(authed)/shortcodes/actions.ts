@@ -21,7 +21,8 @@ import {
   codeExists, createShortcode, getShortcode, promoteShortcode,
   setShortcodeActive, setShortcodeHandlerUrl,
   setShortcodeStatus, updateShortcode,
-  type ShortcodeEnvironment, type ShortcodeStatus, type ShortcodeWrite,
+  type ShortcodeEnvironment, type ShortcodePayloadFormat,
+  type ShortcodeStatus, type ShortcodeWrite,
   buildShortcodeLabel, labelPartsFor, defaultSandboxOperatorId,
 } from "@/lib/shortcodes";
 import { audit, clientIp } from "@/lib/audit";
@@ -85,6 +86,12 @@ async function parseWrite(fd: FormData): Promise<{ write?: ShortcodeWrite; error
     status = boolField(fd, "active") ? "active" : "deactivated";
   }
   const status_message = strField(fd, "status_message") || null;
+  // Handler body shape (db/030). Anything other than an explicit 'legacy'
+  // means the unified gateway body -- so a form that never renders this
+  // control, or a stale bookmarked POST, keeps the safe default rather
+  // than switching a client's handler contract by omission.
+  const payload_format: ShortcodePayloadFormat =
+    strField(fd, "payload_format").toLowerCase() === "legacy" ? "legacy" : "gateway";
 
   if (!Number.isFinite(operator_id) || operator_id <= 0)  return { error: "operator is required" };
   if (!code)                                              return { error: "code is required" };
@@ -119,6 +126,7 @@ async function parseWrite(fd: FormData): Promise<{ write?: ShortcodeWrite; error
       bearer_token: auth_mode === "bearer" ? bearer_token : null,
       timeout_secs,
       status, status_message,
+      payload_format,
     },
   };
 }

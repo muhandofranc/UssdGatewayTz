@@ -90,6 +90,12 @@ export async function actionCreateSandboxShortcode(fd: FormData) {
       timeout_secs,
       status: "active",
       status_message: null,
+      // Client-created shortcodes ALWAYS get the unified gateway body.
+      // The legacy shape exists only to carry pre-gateway integrations
+      // across, and switching to it is a super_admin decision on the
+      // /shortcodes form (db/030) -- this form must never offer it, or a
+      // client could point a brand-new handler at a deprecated contract.
+      payload_format: "gateway",
     },
     Number(session.sub),
   );

@@ -13,6 +13,20 @@ Contract for handlers (internal apps OR external clients):
                   "ussd_string":   "1*2",
                   "raw_payload":   { ... whatever the MNO sent ... }
                 }
+              A shortcode may instead be set to the LEGACY body
+              (shortcodes.payload_format='legacy', migration 030) for
+              clients whose handlers predate this gateway:
+                {
+                  "sessionId":       "ABC123",
+                  "msisdn":          "255712345678",
+                  "networkProvider": "VODACOM",
+                  "serviceCode":     "*123*1*2#",   # dialled string, inputs spliced in
+                  "UssdString":      "1*2"
+                }
+              Same URL, same application/json, same CON/END reply --
+              only the request body differs. Key casing is the contract
+              those handlers already parse; see build_handler_payload.
+
   * Reply     EITHER as JSON:
                 { "action": "CON" | "END", "message": "..." }
               OR as plain text first-line:
@@ -257,21 +271,62 @@ def _parse_handler_reply(status: int, body_text: str) -> tuple[UnifiedReply | No
     return None, "bad_action"
 
 
-async def forward(
-    sc: ShortcodeRow,
-    ur: UnifiedRequest,
-    *,
-    default_timeout_secs: float,
-) -> HandlerOutcome:
-    """Single round-trip POST to the handler URL. Returns a
-    `HandlerOutcome` regardless of success / failure — callers always
-    have a structured result to log."""
-    timeout = float(sc.timeout_secs or default_timeout_secs)
-    headers = {"Content-Type": "application/json"}
-    if sc.auth_mode == "bearer" and sc.bearer_token:
-        headers["Authorization"] = f"Bearer {sc.bearer_token}"
+# ------------------------------------------------------------------
+# Handler payload shapes
+# ------------------------------------------------------------------
 
-    payload = {
+def _legacy_service_code(service_code: str, ussd_string: str) -> str:
+    """Rebuild the fully-dialled string the pre-gateway handlers expect.
+
+    Those handlers were integrated aggregator-direct, where `serviceCode`
+    carried the WHOLE dialled string including the user's menu inputs --
+    not the bare shortcode. The PHP senders reconstruct it by stripping
+    the trailing '#' and splicing the input trail back in:
+
+        *149*76#  +  ussd_string ''      ->  *149*76#      (opening leg)
+        *149*76#  +  ussd_string '1'     ->  *149*76*1#
+        *149*76#  +  ussd_string '1*2'   ->  *149*76*1*2#
+
+    Sending the bare shortcode on every leg instead would look to those
+    handlers like the user re-dialled from the top each time, so this is
+    load-bearing, not cosmetic. Mirrors
+    /var/www/html/jubileetigo/index_patch.php.
+    """
+    if not ussd_string:
+        return service_code
+    return f"{service_code.rstrip('#')}*{ussd_string}#"
+
+
+def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
+    """The JSON body POSTed to this shortcode's handler.
+
+    Two shapes, chosen per shortcode by `shortcodes.payload_format`
+    (migration 030). Both go out as application/json and both expect the
+    same CON/END reply, so only the request body differs.
+    """
+    if (sc.payload_format or "gateway") == "legacy":
+        # Verbatim pre-gateway contract. The key names and their casing
+        # ARE the contract these handlers parse -- capital 'U' in
+        # 'UssdString' included -- so do not tidy them.
+        #
+        # Deliberately omits `event` and `raw_payload`: legacy handlers
+        # never received them, and the terminal events that would make
+        # `event` meaningful are short-circuited in main.py and never
+        # reach the forwarder anyway.
+        return {
+            "sessionId":       ur.session_id,
+            "msisdn":          ur.msisdn,
+            # Derived from the gateway's canonical operator name. Tigo's
+            # rebrand to Yas renamed one operator rather than creating a
+            # second, so it stays 'tigo' -> 'TIGO' here; changing the wire
+            # value is an operator rename, not a per-shortcode option.
+            "networkProvider": (ur.operator or "").upper(),
+            "serviceCode":     _legacy_service_code(ur.service_code,
+                                                    ur.ussd_string),
+            "UssdString":      ur.ussd_string,
+        }
+
+    return {
         "operator":     ur.operator,
         "msisdn":       ur.msisdn,
         "session_id":   ur.session_id,
@@ -286,6 +341,24 @@ async def forward(
         "raw_payload":  ur.raw_payload,
     }
 
+
+async def forward(
+    sc: ShortcodeRow,
+    ur: UnifiedRequest,
+    *,
+    default_timeout_secs: float,
+) -> HandlerOutcome:
+    """Single round-trip POST to the handler URL. Returns a
+    `HandlerOutcome` regardless of success / failure — callers always
+    have a structured result to log."""
+    timeout = float(sc.timeout_secs or default_timeout_secs)
+    headers = {"Content-Type": "application/json"}
+    if sc.auth_mode == "bearer" and sc.bearer_token:
+        headers["Authorization"] = f"Bearer {sc.bearer_token}"
+
+    payload = build_handler_payload(sc, ur)
+    payload_format = sc.payload_format or "gateway"
+
     # --- outbound log: one INFO line per call + DEBUG full payload ---
     # The INFO line has everything an oncall engineer needs to triage
     # without raising log level: shortcode, URL, session, event,
@@ -294,10 +367,10 @@ async def forward(
     payload_json = json.dumps(payload, default=str)
     LOGGER.info(
         "→ handler call shortcode=%s url=%s session=%s event=%s msisdn=%s "
-        "ussd=%r auth=%s timeout=%ss payload=%s",
+        "ussd=%r auth=%s format=%s timeout=%ss payload=%s",
         sc.code, sc.handler_url, ur.session_id, ur.event.value,
         ur.msisdn, ur.ussd_string,
-        sc.auth_mode or "none", timeout,
+        sc.auth_mode or "none", payload_format, timeout,
         payload_json[:_LOG_BODY_INLINE],
     )
     LOGGER.debug("  full request payload: %s", payload_json[:_LOG_BODY_TRUNC])

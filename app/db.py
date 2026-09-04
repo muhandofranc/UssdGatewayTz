@@ -100,6 +100,12 @@ class ShortcodeRow:
     active: bool             # legacy flag; superseded by `status` since 007
     status: str              # 'active' | 'maintenance' | 'deactivated'
     status_message: Optional[str]
+    # Body shape POSTed to handler_url (migration 030).
+    #   'gateway' — unified snake_case shape (default, everything pre-030)
+    #   'legacy'  — the pre-gateway {sessionId, msisdn, networkProvider,
+    #               serviceCode, UssdString} shape, for clients whose
+    #               handlers predate this gateway.
+    payload_format: str = "gateway"
 
 
 def resolve_shortcode(operator_name: str, code: str) -> Optional[ShortcodeRow]:
@@ -119,7 +125,8 @@ def resolve_shortcode(operator_name: str, code: str) -> Optional[ShortcodeRow]:
         SELECT s.id, s.operator_id, o.name AS operator_name,
                s.code, s.owner_user_id, s.handler_url,
                s.auth_mode, s.bearer_token, s.timeout_secs,
-               s.active, s.status, s.status_message
+               s.active, s.status, s.status_message,
+               s.payload_format
           FROM shortcodes s
           JOIN operators  o ON o.id = s.operator_id
          WHERE o.name = %s AND s.code = %s

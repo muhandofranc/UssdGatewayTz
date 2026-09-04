@@ -222,7 +222,20 @@ export default async function ShortcodesPage({
                 <td className="px-2 py-1.5 text-xs font-mono max-w-[20rem] truncate" title={r.handler_url}>
                   {r.handler_url}
                 </td>
-                <td className="px-2 py-1.5 text-xs font-mono">{r.auth_mode}</td>
+                <td className="px-2 py-1.5 text-xs font-mono">
+                  {r.auth_mode}
+                  {r.payload_format === "legacy" ? (
+                    // Otherwise invisible outside the edit form, and it
+                    // changes the contract the handler is held to — an admin
+                    // debugging "handler rejects our body" needs to see it here.
+                    <div
+                      className="text-[10px] text-amber-700 dark:text-amber-400 font-sans"
+                      title={`Handler receives the pre-gateway payload shape (networkProvider=${r.operator_name.toUpperCase()})`}
+                    >
+                      legacy payload
+                    </div>
+                  ) : null}
+                </td>
                 <td className="px-2 py-1.5 text-xs text-right tabular-nums">{r.timeout_secs}s</td>
                 <td className="px-2 py-1.5 text-xs">
                   {r.status === "active" ? (
