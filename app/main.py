@@ -55,6 +55,22 @@ from .adapters import vodacom, airtel, tigo, halotel  # noqa: F401
 LOGGER = logging.getLogger("ussd_gateway")
 _SETTINGS = load_settings()
 
+# Strong references to in-flight fire-and-forget tasks.
+#
+# asyncio holds only a WEAK reference to a running task, so a task with
+# no other reference can be garbage-collected mid-flight and disappear
+# without raising anything. Every fire-and-forget dispatch must keep a
+# reference until the task completes.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> None:
+    """Run `coro` detached from the request, holding a strong reference
+    for its lifetime so it cannot be collected before it finishes."""
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
@@ -306,40 +322,62 @@ async def _handle_ussd(req: Request, operator_key: str) -> Response:
         )
         return resp
 
-    # 2c. terminal events (user cancelled / timeout / charge failed) —
-    # short-circuit: no handler call, expire session state, ACK MNO.
-    # The MNO has already torn down the session client-side; sending
-    # the handler a no-op reply call would just add latency the
-    # customer never sees.
+    # 2c. terminal events (user cancelled / timeout / charge failed).
+    # The MNO has already torn down the session client-side, so there is
+    # no reply to render and nothing the customer can still see. We ACK
+    # the MNO immediately and notify the handler OUT OF BAND, so it can
+    # release whatever it was holding for this session (reserved stock,
+    # a pending charge, a half-written record) instead of finding out
+    # only via its own timeout.
+    #
+    # The notification is fire-and-forget by design: the handler's reply
+    # is discarded, and the forward never sits in front of the MNO ack.
+    # A terminal event is a notification, not a menu leg.
     if ur.event in TERMINAL_EVENTS:
-        # Best-effort: lift operator_id from session-cache lookup
-        # (adapter already did this in parse(); the row we want here
-        # is the same one we're about to expire). For now we use the
-        # adapter-cached id via the operator name lookup helper below.
-        op_id = _operator_id_or_zero(operator_key)
+        # Resolve BEFORE expiring. ur.service_code was recovered by the
+        # adapter from the session-cache row during parse() — the very
+        # row we are about to delete — and without it there is no
+        # shortcode, hence no handler URL to notify.
+        sc = resolve_shortcode(operator_key, ur.service_code) if ur.service_code else None
+        op_id = sc.operator_id if sc is not None else _operator_id_or_zero(operator_key)
+        op_name = sc.operator_name if sc is not None else operator_key
+
         expire_active_session(ur.session_id, op_id)
+
         # Acknowledge to the MNO with an END (no message — the user
         # is gone). The MNO accepts an empty <msg></msg>.
         reply = UnifiedReply(action=Action.END, message="")
         resp = adapter.render(reply)
-        log_leg(
-            operator_id=op_id, operator_name=operator_key,
-            # Attributable when the adapter recovered it from the session
-            # cache; None if session state was already gone (cache miss /
-            # swept / cancel arrived before we ever saw the START leg).
-            shortcode_id=ur.shortcode_id,
-            service_code=ur.service_code,
-            session_id=ur.session_id, msisdn=ur.msisdn,
-            ussd_string=ur.ussd_string,
-            direction="inbound",
-            raw_request_payload=ur.raw_payload,
-            raw_response_payload=None,
-            handler_url=None, handler_status_code=None,
-            handler_response_action=reply.action.value,
-            handler_response_text=ur.event.value,   # logs which terminal
-            handler_elapsed_ms=None,
-            error_class=None, error_detail=None,
-        )
+
+        skip_reason = _terminal_notify_skip_reason(sc)
+        if skip_reason is None:
+            # Logged by the background task once the handler answers, so
+            # the row carries handler_url / status / elapsed.
+            _spawn_background(_notify_terminal_event(sc, ur, reply))
+        else:
+            log_leg(
+                operator_id=op_id, operator_name=op_name,
+                # Attributable when the adapter recovered it from the session
+                # cache; None if session state was already gone (cache miss /
+                # swept / cancel arrived before we ever saw the START leg).
+                shortcode_id=sc.id if sc is not None else ur.shortcode_id,
+                service_code=ur.service_code,
+                session_id=ur.session_id, msisdn=ur.msisdn,
+                ussd_string=ur.ussd_string,
+                direction="inbound",
+                raw_request_payload=ur.raw_payload,
+                raw_response_payload=None,
+                handler_url=None, handler_status_code=None,
+                handler_response_action=reply.action.value,
+                handler_response_text=ur.event.value,   # logs which terminal
+                handler_elapsed_ms=None,
+                # Not an error — these are the legitimate reasons a
+                # terminal event has no handler to reach. Recorded so the
+                # population stays countable rather than looking like the
+                # pre-change silent short-circuit.
+                error_class=None,
+                error_detail=f"handler not notified: {skip_reason}",
+            )
         return resp
 
     # 3. resolve — look up the handler URL + auth for (operator, code).
@@ -478,6 +516,84 @@ async def _handle_ussd(req: Request, operator_key: str) -> Response:
 
 
 # ---------- async-outbound helpers (Halotel) -----------------------
+
+def _terminal_notify_skip_reason(sc) -> Optional[str]:
+    """None when a terminal event should be forwarded to `sc`'s handler,
+    otherwise the reason it must not be.
+
+    Three legitimate reasons a terminal event has no handler to reach:
+
+    unresolved
+        No shortcode. The dialed code lives only in the session-cache row
+        (the MNO wire carries it on the first leg only), so a terminal
+        event for a session we never saw open — a retransmit, a cancel
+        that overtook its own START leg, a swept row — has nothing to
+        resolve against.
+
+    shortcode_inactive
+        maintenance / deactivated. The handler was never called for this
+        session in the first place, so it is holding no state to release.
+
+    legacy_payload_format
+        db/030's legacy body is {sessionId, msisdn, networkProvider,
+        serviceCode, UssdString} and carries no `event` key, so a
+        terminal notification would be indistinguishable from a real
+        user-input leg. A legacy handler could advance its menu or
+        attempt a charge for a customer who has already hung up. Adding
+        `event` there is a change to a wire contract those handlers
+        already parse, so it is a deliberate opt-in, not a default.
+    """
+    if sc is None:
+        return "unresolved"
+    if sc.status != "active":
+        return "shortcode_inactive"
+    if (sc.payload_format or "gateway") != "gateway":
+        return "legacy_payload_format"
+    return None
+
+
+async def _notify_terminal_event(sc, ur: UnifiedRequest, ack: UnifiedReply) -> None:
+    """Fire-and-forget terminal-event notification.
+
+    The handler's reply is deliberately discarded: the MNO has already
+    been acked with `ack`, the session is gone, and there is no screen
+    left to render to. What we keep is the log row — with handler_url,
+    status and elapsed set, so these legs are countable as forwarded
+    rather than silently absent.
+    """
+    try:
+        outcome = await forward(
+            sc, ur, default_timeout_secs=_SETTINGS.handler_default_timeout_secs,
+        )
+    except Exception:
+        LOGGER.exception(
+            "terminal-event notify raised shortcode=%s session=%s event=%s",
+            sc.code, ur.session_id, ur.event.value,
+        )
+        return
+
+    try:
+        log_leg(
+            operator_id=sc.operator_id, operator_name=sc.operator_name,
+            shortcode_id=sc.id, service_code=ur.service_code,
+            session_id=ur.session_id, msisdn=ur.msisdn,
+            ussd_string=ur.ussd_string,
+            direction="inbound",
+            raw_request_payload=ur.raw_payload,
+            raw_response_payload=outcome.raw_response_payload,
+            handler_url=sc.handler_url,
+            handler_status_code=outcome.status_code,
+            # What we told the MNO, not what the handler said back —
+            # the handler's reply has no route to the customer here.
+            handler_response_action=ack.action.value,
+            handler_response_text=ur.event.value,   # logs which terminal
+            handler_elapsed_ms=outcome.elapsed_ms,
+            error_class=outcome.error_class,
+            error_detail=outcome.error_detail,
+        )
+    except Exception:
+        LOGGER.exception("terminal-event log_leg failed session=%s", ur.session_id)
+
 
 async def _async_forward_then_push(adapter, ur: UnifiedRequest, sc) -> None:
     """Background coroutine: forward to handler, push reply outbound,

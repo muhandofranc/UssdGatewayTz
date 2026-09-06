@@ -30,13 +30,11 @@ class SessionEvent(str, Enum):
     * INPUT          subsequent leg, msg carries the user's input
                      (Vodacom TruRoute type=2).
     * USER_CANCELLED user pressed cancel / hung up (Vodacom type=3).
-                     Terminal — gateway does NOT call the handler;
-                     just logs + expires session state + ACKs MNO.
+                     Terminal — MNO is acked immediately and the
+                     handler is notified out of band.
     * TIMEOUT        MNO closed the session (Vodacom type=4). Terminal.
     * CHARGE_FAILED  premium-rate charge attempt failed (Vodacom
-                     type=10). Terminal — handler is notified but
-                     gateway does not wait on a reply (the customer
-                     has already moved on).
+                     type=10). Terminal.
     * DELIVERY_ACK   informational delivery receipt from the MNO
                      (Halotel type=103 — "menu reached the user").
                      NOT terminal — the session is still alive.
@@ -44,12 +42,16 @@ class SessionEvent(str, Enum):
                      expire, just inbound ack + log.
 
     The TERMINAL subset is { USER_CANCELLED, TIMEOUT, CHARGE_FAILED }.
-    The pipeline short-circuits forwarder.forward() for those and
-    returns a no-content ack to the MNO, expiring the session.
+    The pipeline acks the MNO with a no-content END and expires the
+    session, then notifies the handler fire-and-forget so it can
+    release whatever it held for that session. The handler's reply is
+    discarded — the customer is already gone. Notification is skipped
+    when there is nothing to reach or nothing safe to send; see
+    _terminal_notify_skip_reason() in main.py.
 
-    The NO_FORWARD subset is TERMINAL_EVENTS ∪ { DELIVERY_ACK } —
-    these never reach the handler, but DELIVERY_ACK keeps the
-    session cache row alive.
+    DELIVERY_ACK is the one event that genuinely never reaches the
+    handler, and unlike the terminal events it keeps the session cache
+    row alive.
     """
     START          = "start"
     INPUT          = "input"
@@ -65,7 +67,10 @@ TERMINAL_EVENTS = frozenset({
     SessionEvent.CHARGE_FAILED,
 })
 
-NO_FORWARD_EVENTS = TERMINAL_EVENTS | frozenset({SessionEvent.DELIVERY_ACK})
+# Events that never reach the handler at all. Terminal events used to
+# be in here; they are now notified fire-and-forget (main.py 2c), so
+# DELIVERY_ACK is all that remains.
+NO_FORWARD_EVENTS = frozenset({SessionEvent.DELIVERY_ACK})
 
 
 @dataclass(frozen=True)

@@ -320,9 +320,13 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
         # 'UssdString' included -- so do not tidy them.
         #
         # Deliberately omits `event` and `raw_payload`: legacy handlers
-        # never received them, and the terminal events that would make
-        # `event` meaningful are short-circuited in main.py and never
-        # reach the forwarder anyway.
+        # never received them. That omission is also why legacy-format
+        # shortcodes are excluded from terminal-event notifications —
+        # with no `event` key, a cancel/timeout/charge-failed body is
+        # identical in shape to a real user-input leg, and the handler
+        # could advance its menu or charge for a session the customer
+        # already abandoned. See _terminal_notify_skip_reason() in
+        # main.py; adding `event` here is an opt-in contract change.
         return {
             "sessionId":       ur.session_id,
             "msisdn":          ur.msisdn,
@@ -350,10 +354,13 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
         "service_code": ur.service_code,
         "ussd_string":  ur.ussd_string,
         # 'start' = first leg (msg was the dialed service code);
-        # 'input' = subsequent legs. Terminal events
-        # (user_cancelled / timeout / charge_failed) are
-        # short-circuited in main.py and never reach forward(),
-        # so the handler will only ever see 'start' or 'input'.
+        # 'input' = subsequent legs; 'user_cancelled' / 'timeout' /
+        # 'charge_failed' = a terminal event, delivered fire-and-forget
+        # AFTER the MNO has been acked so the handler can release what
+        # it was holding for the session. This field is the only thing
+        # distinguishing that notification from a real leg, so a handler
+        # on this format must branch on it before treating the body as
+        # user input.
         "event":        ur.event.value,
         "raw_payload":  ur.raw_payload,
     }
