@@ -190,7 +190,7 @@ def load() -> Settings:
         ),
         expiry=SessionExpiryConfig(
             enabled=_env_bool("USSD_SESSION_EXPIRY_NOTIFY", True),
-            idle_secs=_env_int("USSD_SESSION_IDLE_EXPIRY_SECS", 15),
+            idle_secs=_env_int("USSD_SESSION_IDLE_EXPIRY_SECS", 30),
             notify_max_age_secs=_env_int(
                 "USSD_SESSION_EXPIRY_NOTIFY_MAX_AGE_SECS", 3600
             ),
