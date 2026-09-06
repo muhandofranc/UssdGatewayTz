@@ -88,6 +88,26 @@ TASKS_INTRADAY: list[tuple[str, str]] = [
         "SELECT refresh_today_session_summary_mv()",
         "refresh_today_session_summary_mv()",
     ),
+    (
+        # Drop ussd_active_sessions rows idle > 10 minutes. db/002
+        # specified this sweeper and nothing implemented it, so the
+        # table had grown to 2.88M rows holding 46 live sessions --
+        # a large PK index competing for shared_buffers on the two
+        # blocking calls every USSD leg makes. A USSD session idle
+        # for 10 minutes is dead by definition: MNO gateway TTLs run
+        # 30-120s in practice.
+        #
+        # Deletes in committed batches of 20k, capped at 200 batches
+        # (4M rows) per run so one tick can never run unbounded. In
+        # steady state the first batch comes back short and the
+        # procedure returns after a single small DELETE.
+        #
+        # The INOUT parameter is passed explicitly as NULL so the CALL
+        # returns a row and the count lands in the scheduler log.
+        # See db/032.
+        "CALL sweep_active_sessions(10, 20000, 200, NULL)",
+        "sweep_active_sessions(idle>10min)",
+    ),
 ]
 
 
