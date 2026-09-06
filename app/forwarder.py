@@ -77,7 +77,9 @@ from .metrics import (
     USSD_HOP_LATENCY_SECONDS,
     USSD_HOP_TOTAL,
 )
-from .unified import Action, HandlerOutcome, UnifiedReply, UnifiedRequest
+from .unified import (
+    Action, HandlerOutcome, TERMINAL_EVENTS, UnifiedReply, UnifiedRequest,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -320,13 +322,37 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
         # 'UssdString' included -- so do not tidy them.
         #
         # Deliberately omits `event` and `raw_payload`: legacy handlers
-        # never received them. That omission is also why legacy-format
-        # shortcodes are excluded from terminal-event notifications —
-        # with no `event` key, a cancel/timeout/charge-failed body is
-        # identical in shape to a real user-input leg, and the handler
-        # could advance its menu or charge for a session the customer
-        # already abandoned. See _terminal_notify_skip_reason() in
-        # main.py; adding `event` here is an opt-in contract change.
+        # never received them, and the key set is fixed by the contract
+        # those handlers already parse.
+        #
+        # Terminal events (cancel / MNO timeout / charge failed) still
+        # have to reach these handlers, and with no `event` key the only
+        # channel available is `UssdString`. So on a terminal leg that
+        # field carries a sentinel INSTEAD of the accumulated trail:
+        #
+        #     __USER_CANCELLED__ / __TIMEOUT__ / __CHARGE_FAILED__
+        #
+        # Chosen deliberately over appending to the trail: '1*2*cancel'
+        # is read as a menu selection by any handler that splits on '*',
+        # which is the failure mode this is trying to avoid. Replacing
+        # yields one token that matches nothing in a numeric menu.
+        #
+        # KNOWN HAZARD, accepted: `UssdString` is the field legacy
+        # handlers navigate from, so a handler that has not been taught
+        # this sentinel will run it through its menu logic rather than
+        # treating the session as over. At a node that accepts free text
+        # (an amount, an account number, a name) it can be stored as a
+        # real value. A handler must branch on the sentinel BEFORE
+        # treating the body as input. The gateway format does not do
+        # this — it has `event`, and its trail stays intact.
+        #
+        # The real trail is never lost: log_leg() records ur.ussd_string,
+        # not the payload, so ussd_session_logs still shows where the
+        # customer was when the session ended.
+        ussd_string = ur.ussd_string
+        if ur.event in TERMINAL_EVENTS:
+            ussd_string = f"__{ur.event.value.upper()}__"
+
         return {
             "sessionId":       ur.session_id,
             "msisdn":          ur.msisdn,
@@ -344,7 +370,7 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
             # we keep one consistent meaning for the field across both
             # payload shapes.
             "serviceCode":     ur.service_code,
-            "UssdString":      ur.ussd_string,
+            "UssdString":      ussd_string,
         }
 
     return {

@@ -5,9 +5,13 @@ short-circuited: the gateway acked the MNO and the handler was never told,
 so a handler holding state for that session -- reserved stock, a pending
 charge, a half-written record -- only found out via its own timeout.
 
-Terminal events are now forwarded fire-and-forget AFTER the MNO ack. These
-tests pin the three cases where that notification must NOT happen, and the
-`event` field that makes it safe when it does.
+Terminal events are now forwarded fire-and-forget AFTER the MNO ack, on both
+payload formats. The gateway body says which event it was in `event`; the
+legacy body has no such key, so `UssdString` carries a sentinel instead.
+
+These tests pin the two cases where notification must NOT happen, the `event`
+field on the gateway shape, and the sentinel on the legacy shape -- including
+that it never looks like a menu selection and never leaks into a normal leg.
 """
 import asyncio
 import os
@@ -73,27 +77,67 @@ def test_maintenance_and_deactivated_are_skipped():
         assert _terminal_notify_skip_reason(_sc(status=status)) == "shortcode_inactive"
 
 
-def test_legacy_payload_format_is_skipped():
-    assert _terminal_notify_skip_reason(
-        _sc(payload_format="legacy")) == "legacy_payload_format"
+def test_legacy_shortcodes_are_notified_too():
+    """Legacy handlers get terminal events via the UssdString sentinel,
+    so payload_format is no longer a reason to skip."""
+    assert _terminal_notify_skip_reason(_sc(payload_format="legacy")) is None
 
 
-def test_legacy_body_could_not_express_a_terminal_event():
-    """The reason for the skip above, pinned: on the legacy shape a
-    cancel is indistinguishable from real user input."""
+# ---- the legacy sentinel -------------------------------------------------
+
+def test_legacy_terminal_leg_carries_the_sentinel():
+    for ev, expected in (
+        (SessionEvent.USER_CANCELLED, "__USER_CANCELLED__"),
+        (SessionEvent.TIMEOUT,        "__TIMEOUT__"),
+        (SessionEvent.CHARGE_FAILED,  "__CHARGE_FAILED__"),
+    ):
+        p = build_handler_payload(_sc(payload_format="legacy"), _ur(ev))
+        assert p["UssdString"] == expected
+
+
+def test_sentinel_replaces_the_trail_rather_than_extending_it():
+    """'1*2*cancel' would be read as a menu selection by any handler
+    that splits the trail on '*'. The sentinel must be the whole value
+    and must contain no separator."""
+    p = build_handler_payload(_sc(payload_format="legacy"),
+                              _ur(SessionEvent.USER_CANCELLED))
+    assert "*" not in p["UssdString"]
+    assert p["UssdString"].split("*") == ["__USER_CANCELLED__"]
+    assert "1*2" not in p["UssdString"]
+
+
+def test_sentinel_makes_a_cancel_distinguishable_from_real_input():
     cancelled = build_handler_payload(_sc(payload_format="legacy"),
                                       _ur(SessionEvent.USER_CANCELLED))
     real_input = build_handler_payload(_sc(payload_format="legacy"),
                                        _ur(SessionEvent.INPUT))
-    assert "event" not in cancelled
-    assert cancelled == real_input
+    assert cancelled != real_input
+    assert cancelled["UssdString"] != real_input["UssdString"]
 
 
-def test_inactive_is_checked_before_payload_format():
-    """A legacy shortcode that is also paused reports the stronger
-    reason, so the log says why it really was not called."""
-    assert _terminal_notify_skip_reason(
-        _sc(status="maintenance", payload_format="legacy")) == "shortcode_inactive"
+def test_sentinel_adds_no_key_to_the_legacy_contract():
+    """The whole point of routing through UssdString: the key set the
+    legacy handlers parse is untouched."""
+    p = build_handler_payload(_sc(payload_format="legacy"),
+                              _ur(SessionEvent.USER_CANCELLED))
+    assert set(p) == {"sessionId", "msisdn", "networkProvider",
+                      "serviceCode", "UssdString"}
+    assert "event" not in p
+
+
+def test_normal_legacy_legs_keep_the_real_trail():
+    """Regression guard: the sentinel must never touch start/input."""
+    for ev in (SessionEvent.START, SessionEvent.INPUT):
+        p = build_handler_payload(_sc(payload_format="legacy"), _ur(ev))
+        assert p["UssdString"] == "1*2"
+
+
+def test_gateway_trail_is_never_replaced():
+    """The sentinel is a legacy-only workaround; the gateway shape has
+    `event`, so its trail stays intact and usable."""
+    p = build_handler_payload(_sc(), _ur(SessionEvent.USER_CANCELLED))
+    assert p["ussd_string"] == "1*2"
+    assert p["event"] == "user_cancelled"
 
 
 # ---- the fire-and-forget dispatch itself --------------------------------

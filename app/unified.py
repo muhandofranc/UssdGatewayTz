@@ -45,8 +45,10 @@ class SessionEvent(str, Enum):
     The pipeline acks the MNO with a no-content END and expires the
     session, then notifies the handler fire-and-forget so it can
     release whatever it held for that session. The handler's reply is
-    discarded — the customer is already gone. Notification is skipped
-    when there is nothing to reach or nothing safe to send; see
+    discarded — the customer is already gone. Gateway-format handlers
+    read the event from `event`; legacy-format handlers get a sentinel
+    in `UssdString` instead (forwarder.build_handler_payload). Skipped
+    only when there is no handler to reach — see
     _terminal_notify_skip_reason() in main.py.
 
     DELIVERY_ACK is the one event that genuinely never reaches the

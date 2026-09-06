@@ -521,7 +521,13 @@ def _terminal_notify_skip_reason(sc) -> Optional[str]:
     """None when a terminal event should be forwarded to `sc`'s handler,
     otherwise the reason it must not be.
 
-    Three legitimate reasons a terminal event has no handler to reach:
+    Both payload formats are notified. The gateway body says which
+    terminal event it was in `event`; the legacy body has no such key,
+    so build_handler_payload() puts a sentinel in `UssdString` instead
+    (see the comment there — a legacy handler must branch on it before
+    treating the body as menu input).
+
+    Two legitimate reasons a terminal event has no handler to reach:
 
     unresolved
         No shortcode. The dialed code lives only in the session-cache row
@@ -533,22 +539,11 @@ def _terminal_notify_skip_reason(sc) -> Optional[str]:
     shortcode_inactive
         maintenance / deactivated. The handler was never called for this
         session in the first place, so it is holding no state to release.
-
-    legacy_payload_format
-        db/030's legacy body is {sessionId, msisdn, networkProvider,
-        serviceCode, UssdString} and carries no `event` key, so a
-        terminal notification would be indistinguishable from a real
-        user-input leg. A legacy handler could advance its menu or
-        attempt a charge for a customer who has already hung up. Adding
-        `event` there is a change to a wire contract those handlers
-        already parse, so it is a deliberate opt-in, not a default.
     """
     if sc is None:
         return "unresolved"
     if sc.status != "active":
         return "shortcode_inactive"
-    if (sc.payload_format or "gateway") != "gateway":
-        return "legacy_payload_format"
     return None
 
 
