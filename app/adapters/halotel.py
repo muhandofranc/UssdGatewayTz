@@ -44,9 +44,9 @@ Inbound requestType mapping
 |--------------------|-------------------------------|------------------------|--------------------|
 | `100`              | First USSD request (msg = dialed code) | `START`        | forward + push     |
 | `101`              | User input / menu selection            | `INPUT`        | forward + push     |
-| `102`              | User cancelled transaction              | `USER_CANCELLED` | terminal — ack only, no push |
+| `102`              | User cancelled transaction              | `USER_CANCELLED` | terminal — ack, notify handler, no push |
 | `103`              | Display-ack (menu reached user)         | `DELIVERY_ACK` | ack only, no forward, no expire |
-| `104`              | Transaction error, must cancel          | `TIMEOUT`      | terminal — ack only, no push |
+| `104`              | Transaction error, must cancel          | `TIMEOUT`      | terminal — ack, notify handler, no push |
 
 Outbound requestType selection
 ------------------------------

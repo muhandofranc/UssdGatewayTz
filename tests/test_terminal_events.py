@@ -164,3 +164,37 @@ def test_spawn_background_holds_a_reference_until_done():
     asyncio.run(scenario())
     assert seen == ["ran"]
     assert len(_BACKGROUND_TASKS) == 0, "completed task not released"
+
+
+# ---- which operators can raise one at all --------------------------------
+
+def test_operator_terminal_event_coverage():
+    """Only two of the four MNOs signal terminal events on the wire, so
+    only those two can ever notify a handler. Pinned because it is the
+    first question asked when a handler sees no cancel for a partner.
+
+      vodacom  TruRoute type 3 / 4 / 10   -> all three
+      halotel  requestType 102 / 104      -> cancel + timeout only
+                                             (no charge-failed in spec)
+      airtel   wire is input/sessionid/msisdn and NOTHING else
+      tigo     no terminal events in the observed wire
+    """
+    from app.adapters.vodacom import _TYPE_EVENT_MAP as VODA
+    from app.adapters.halotel import _TYPE_EVENT_MAP as HALO
+
+    assert VODA["3"]  is SessionEvent.USER_CANCELLED
+    assert VODA["4"]  is SessionEvent.TIMEOUT
+    assert VODA["10"] is SessionEvent.CHARGE_FAILED
+    assert TERMINAL_EVENTS <= set(VODA.values())
+
+    assert HALO["102"] is SessionEvent.USER_CANCELLED
+    assert HALO["104"] is SessionEvent.TIMEOUT
+    assert SessionEvent.CHARGE_FAILED not in HALO.values()
+
+    # airtel + tigo derive event from cache presence / NEW_REQUEST only.
+    import app.adapters.airtel as airtel, app.adapters.tigo as tigo
+    for mod in (airtel, tigo):
+        assert not hasattr(mod, "_TYPE_EVENT_MAP")
+        src = open(mod.__file__).read()
+        for ev in ("USER_CANCELLED", "CHARGE_FAILED"):
+            assert f"SessionEvent.{ev}" not in src, f"{mod.__name__} now maps {ev}"
