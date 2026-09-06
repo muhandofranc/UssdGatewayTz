@@ -93,9 +93,26 @@ class SessionExpiryConfig:
     operator by treating inactivity itself as the terminal signal.
 
     idle_secs
-        How long with no leg before a session is considered dead. db/002
-        specified 10 minutes ("gateway TTLs vary 30-120s in practice"),
-        which is the default here.
+        How long with no leg before a session is considered dead. This
+        is USER THINK TIME -- the gap between the gateway answering and
+        the subscriber's next keypress arriving -- so it is not a
+        latency budget, it is how long a person is allowed to read a
+        menu and type.
+
+        Set BELOW the MNO's own session TTL and the gateway starts
+        killing sessions the network still considers live. The next leg
+        then finds no cache row, and for Vodacom and Halotel that means
+        service_code = '' (vodacom.py:206, halotel.py:411), no shortcode
+        resolves, and the subscriber gets "Service not configured"
+        mid-flow. On Airtel it is worse: cache presence IS the
+        START/INPUT discriminator (airtel.py:136-138), so a genuine
+        INPUT leg is reclassified as START. db/002 records observed MNO
+        gateway TTLs of 30-120s.
+
+        Airtel and Tigo are the exposed pair: they send no terminal
+        event at all, so this is the only thing that ends their
+        sessions, and it will cut a real subscriber off mid-menu if it
+        fires while they are still typing.
 
     notify_max_age_secs
         The BACKLOG GUARD, and the reason this is safe to switch on
@@ -107,7 +124,10 @@ class SessionExpiryConfig:
         above idle_secs and far below the age of the backlog.
 
     sweep_interval_secs
-        How often each gateway worker looks for expired sessions.
+        How often each gateway worker looks for expired sessions. Keep
+        it well under idle_secs or it becomes the real resolution: a
+        session idle for idle_secs is only noticed on the next tick, so
+        effective expiry is idle_secs .. idle_secs + sweep_interval_secs.
 
     batch
         Maximum sessions one worker claims per tick. Bounds both the
@@ -170,11 +190,11 @@ def load() -> Settings:
         ),
         expiry=SessionExpiryConfig(
             enabled=_env_bool("USSD_SESSION_EXPIRY_NOTIFY", True),
-            idle_secs=_env_int("USSD_SESSION_IDLE_EXPIRY_SECS", 600),
+            idle_secs=_env_int("USSD_SESSION_IDLE_EXPIRY_SECS", 15),
             notify_max_age_secs=_env_int(
                 "USSD_SESSION_EXPIRY_NOTIFY_MAX_AGE_SECS", 3600
             ),
-            sweep_interval_secs=_env_int("USSD_SESSION_EXPIRY_SWEEP_SECS", 60),
+            sweep_interval_secs=_env_int("USSD_SESSION_EXPIRY_SWEEP_SECS", 5),
             batch=_env_int("USSD_SESSION_EXPIRY_BATCH", 200),
         ),
     )
