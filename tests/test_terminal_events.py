@@ -24,7 +24,9 @@ from app.forwarder import build_handler_payload             # noqa: E402
 from app.main import (                                      # noqa: E402
     _BACKGROUND_TASKS, _spawn_background, _terminal_notify_skip_reason,
 )
-from app.unified import SessionEvent, TERMINAL_EVENTS, UnifiedRequest  # noqa: E402
+from app.unified import (                                   # noqa: E402
+    SESSION_ENDED_EVENTS, SessionEvent, TERMINAL_EVENTS, UnifiedRequest,
+)
 
 
 def _sc(**kw):
@@ -198,3 +200,41 @@ def test_operator_terminal_event_coverage():
         src = open(mod.__file__).read()
         for ev in ("USER_CANCELLED", "CHARGE_FAILED"):
             assert f"SessionEvent.{ev}" not in src, f"{mod.__name__} now maps {ev}"
+
+
+# ---- gateway-declared expiry (SESSION_EXPIRED) ---------------------------
+
+def test_session_expired_is_ended_but_not_wire_terminal():
+    """SESSION_EXPIRED means the session is over, so it must reach the
+    legacy sentinel. It must NOT be in TERMINAL_EVENTS: that set drives
+    the inbound branch in main.py, which answers an actual MNO leg, and
+    expiry has no leg to answer."""
+    assert SessionEvent.SESSION_EXPIRED in SESSION_ENDED_EVENTS
+    assert SessionEvent.SESSION_EXPIRED not in TERMINAL_EVENTS
+    assert TERMINAL_EVENTS < SESSION_ENDED_EVENTS
+
+
+def test_expiry_gateway_body_names_the_event_and_keeps_the_trail():
+    p = build_handler_payload(_sc(), _ur(SessionEvent.SESSION_EXPIRED))
+    assert p["event"] == "session_expired"
+    assert p["ussd_string"] == "1*2"
+
+
+def test_expiry_legacy_body_carries_the_sentinel():
+    p = build_handler_payload(_sc(payload_format="legacy"),
+                              _ur(SessionEvent.SESSION_EXPIRED))
+    assert p["UssdString"] == "__SESSION_EXPIRED__"
+    assert set(p) == {"sessionId", "msisdn", "networkProvider",
+                      "serviceCode", "UssdString"}
+
+
+def test_expiry_backlog_guard_defaults_are_sane():
+    """notify_max_age must sit ABOVE idle, or the notify window is empty
+    and nothing is ever notified; and it must stay finite, or the first
+    run notifies handlers about the entire accumulated backlog."""
+    from app.config import load
+    cfg = load().expiry
+    assert cfg.idle_secs > 0
+    assert cfg.notify_max_age_secs > cfg.idle_secs
+    assert cfg.batch > 0
+    assert cfg.sweep_interval_secs > 0

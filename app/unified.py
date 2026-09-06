@@ -61,6 +61,12 @@ class SessionEvent(str, Enum):
     TIMEOUT        = "timeout"
     CHARGE_FAILED  = "charge_failed"
     DELIVERY_ACK   = "delivery_ack"
+    # Gateway-generated, never parsed off any MNO wire: no leg has
+    # arrived for this session in `expiry.idle_secs`, so the gateway
+    # declares it dead, drops the cache row and tells the handler.
+    # This is the ONLY terminal signal Airtel and Tigo sessions can
+    # produce -- neither aggregator sends cancel or timeout at all.
+    SESSION_EXPIRED = "session_expired"
 
 
 TERMINAL_EVENTS = frozenset({
@@ -72,6 +78,13 @@ TERMINAL_EVENTS = frozenset({
 # Events that never reach the handler at all. Terminal events used to
 # be in here; they are now notified fire-and-forget (main.py 2c), so
 # DELIVERY_ACK is all that remains.
+# Everything that means "this session is over", whatever declared it.
+# TERMINAL_EVENTS is what an MNO signalled on the wire; SESSION_EXPIRED
+# is the gateway's own idle-timeout. Keep the two distinct: only the
+# wire-sourced set may drive the inbound pipeline branch in main.py,
+# because only those arrive as an actual HTTP leg to answer.
+SESSION_ENDED_EVENTS = TERMINAL_EVENTS | frozenset({SessionEvent.SESSION_EXPIRED})
+
 NO_FORWARD_EVENTS = frozenset({SessionEvent.DELIVERY_ACK})
 
 

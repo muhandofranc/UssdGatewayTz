@@ -82,6 +82,50 @@ class HalotelConfig:
 
 
 @dataclass(frozen=True)
+class SessionExpiryConfig:
+    """Global inactive-USSD-session expiry, and the notification the
+    gateway sends the handler when it fires.
+
+    Only Vodacom (TruRoute 3/4/10) and Halotel (102/104) signal a
+    terminal event on the wire. Airtel and Tigo signal nothing, so a
+    subscriber who walks away mid-menu leaves the handler holding state
+    it will never be told to release. This closes that gap for every
+    operator by treating inactivity itself as the terminal signal.
+
+    idle_secs
+        How long with no leg before a session is considered dead. db/002
+        specified 10 minutes ("gateway TTLs vary 30-120s in practice"),
+        which is the default here.
+
+    notify_max_age_secs
+        The BACKLOG GUARD, and the reason this is safe to switch on
+        against a live table. A row idle longer than this is not
+        notified AND not deleted by this sweeper -- it is left entirely
+        alone for the manual drain in db/032. Without it, first run
+        against the ~2.9M row backlog would fire millions of HTTP calls
+        at handlers for sessions weeks or months dead. Keep it well
+        above idle_secs and far below the age of the backlog.
+
+    sweep_interval_secs
+        How often each gateway worker looks for expired sessions.
+
+    batch
+        Maximum sessions one worker claims per tick. Bounds both the
+        notification burst and the size of a single DELETE.
+
+    enabled
+        Kill switch. False stops the sweep and the notifications without
+        needing a rollback; expiry then falls back to the scheduler's
+        SQL sweeper alone (silent, no notification).
+    """
+    enabled: bool
+    idle_secs: int
+    notify_max_age_secs: int
+    sweep_interval_secs: int
+    batch: int
+
+
+@dataclass(frozen=True)
 class Settings:
     pg: PgConfig
     # Default per-handler outbound timeout when the shortcode row's
@@ -94,6 +138,7 @@ class Settings:
     listen_port: int
     log_level: str
     halotel: HalotelConfig
+    expiry: SessionExpiryConfig
 
 
 def load() -> Settings:
@@ -122,5 +167,14 @@ def load() -> Settings:
             outbound_pass=os.environ.get("HALOTEL_OUTBOUND_PASS", ""),
             ussdgw_id_default=os.environ.get("HALOTEL_USSDGW_ID", "1"),
             outbound_timeout_secs=_env_float("HALOTEL_OUTBOUND_TIMEOUT_SECS", 4.0),
+        ),
+        expiry=SessionExpiryConfig(
+            enabled=_env_bool("USSD_SESSION_EXPIRY_NOTIFY", True),
+            idle_secs=_env_int("USSD_SESSION_IDLE_EXPIRY_SECS", 600),
+            notify_max_age_secs=_env_int(
+                "USSD_SESSION_EXPIRY_NOTIFY_MAX_AGE_SECS", 3600
+            ),
+            sweep_interval_secs=_env_int("USSD_SESSION_EXPIRY_SWEEP_SECS", 60),
+            batch=_env_int("USSD_SESSION_EXPIRY_BATCH", 200),
         ),
     )

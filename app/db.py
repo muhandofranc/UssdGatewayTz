@@ -304,6 +304,74 @@ def expire_active_session(session_id: str, operator_id: int) -> None:
         cur.execute(sql, (session_id, operator_id))
 
 
+@dataclass
+class ExpiredSession:
+    """A session the gateway declared dead and has already removed from
+    the cache. Carries everything needed to resolve the shortcode and
+    build a handler notification."""
+    session_id: str
+    operator_id: int
+    operator_name: str
+    service_code: str
+    shortcode_id: Optional[int]
+    msisdn: Optional[str]
+    ussd_string: str
+    last_seen_at: object          # datetime; typed loosely to avoid the import
+
+
+def claim_expired_sessions(
+    idle_secs: int, max_age_secs: int, limit: int,
+) -> list[ExpiredSession]:
+    """Atomically CLAIM up to `limit` sessions idle longer than
+    `idle_secs`, deleting them and returning what they held.
+
+    Claim, not read-then-delete: the DELETE ... RETURNING is what makes
+    the notification exactly-once. Several gateway workers (and several
+    containers) run this loop concurrently; a row can only be deleted
+    by one of them, so only that one gets it back to notify on. A plain
+    SELECT-then-notify-then-DELETE would double-notify under any
+    concurrency at all. FOR UPDATE SKIP LOCKED means the losers move
+    on to other rows instead of blocking.
+
+    `max_age_secs` is the BACKLOG GUARD. Rows older than it are neither
+    returned nor deleted here -- they are left exactly as they are for
+    the manual drain in db/032. Without it, the first run of this loop
+    against an un-swept table would notify handlers about every dead
+    session ever accumulated (~2.9M rows when this was written).
+
+    Ordered oldest-first so a backlog inside the window drains in the
+    order sessions actually died.
+    """
+    sql = """
+        WITH victims AS (
+            SELECT session_id, operator_id
+              FROM ussd_active_sessions
+             WHERE last_seen_at <  now() - make_interval(secs => %(idle)s)
+               AND last_seen_at >= now() - make_interval(secs => %(max_age)s)
+             ORDER BY last_seen_at
+             LIMIT %(limit)s
+             FOR UPDATE SKIP LOCKED
+        ), claimed AS (
+            DELETE FROM ussd_active_sessions a
+             USING victims v
+             WHERE a.session_id = v.session_id
+               AND a.operator_id = v.operator_id
+            RETURNING a.session_id, a.operator_id, a.service_code,
+                      a.shortcode_id, a.msisdn, a.ussd_string, a.last_seen_at
+        )
+        SELECT c.session_id, c.operator_id, o.name AS operator_name,
+               c.service_code, c.shortcode_id, c.msisdn, c.ussd_string,
+               c.last_seen_at
+          FROM claimed c
+          JOIN operators o ON o.id = c.operator_id
+    """
+    with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(sql, {"idle": idle_secs, "max_age": max_age_secs,
+                          "limit": limit})
+        rows = cur.fetchall()
+    return [ExpiredSession(**dict(r)) for r in rows]
+
+
 # Keys that may carry credentials in raw_*_payload dicts (currently
 # only Halotel's <pass>). Redacted at log_leg persist time so cleartext
 # stays in memory (where push_outbound needs it) and never lands in

@@ -78,7 +78,7 @@ from .metrics import (
     USSD_HOP_TOTAL,
 )
 from .unified import (
-    Action, HandlerOutcome, TERMINAL_EVENTS, UnifiedReply, UnifiedRequest,
+    Action, HandlerOutcome, SESSION_ENDED_EVENTS, UnifiedReply, UnifiedRequest,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -331,6 +331,7 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
         # field carries a sentinel INSTEAD of the accumulated trail:
         #
         #     __USER_CANCELLED__ / __TIMEOUT__ / __CHARGE_FAILED__
+        #     __SESSION_EXPIRED__  (gateway idle timeout)
         #
         # Chosen deliberately over appending to the trail: '1*2*cancel'
         # is read as a menu selection by any handler that splits on '*',
@@ -350,7 +351,7 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
         # not the payload, so ussd_session_logs still shows where the
         # customer was when the session ended.
         ussd_string = ur.ussd_string
-        if ur.event in TERMINAL_EVENTS:
+        if ur.event in SESSION_ENDED_EVENTS:
             ussd_string = f"__{ur.event.value.upper()}__"
 
         return {

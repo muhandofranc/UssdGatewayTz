@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -36,8 +37,9 @@ from .adapters import REGISTRY
 from .adapters._common import end_reply
 from .config import load as load_settings
 from .db import (
-    close_log_writer, close_pool, expire_active_session, init_log_writer,
-    init_pool, log_leg, resolve_shortcode, status_message_for,
+    claim_expired_sessions, close_log_writer, close_pool,
+    expire_active_session, init_log_writer, init_pool, log_leg,
+    resolve_shortcode, status_message_for,
 )
 from .forwarder import close_forwarder, forward, init_forwarder, sample_pool_gauges
 from .metrics import (
@@ -86,13 +88,30 @@ async def _lifespan(_app: FastAPI):
     init_pool(_SETTINGS.pg)
     init_log_writer()
     init_forwarder()
+    # 4. Idle-session expiry sweeper — needs the pool AND the forwarder,
+    #    so it starts last. Lives here rather than in app/scheduler.py
+    #    because it has to call handlers: the scheduler process only
+    #    executes SQL and has no httpx client or shortcode resolution.
+    expiry_task: Optional[asyncio.Task] = None
+    if _SETTINGS.expiry.enabled:
+        expiry_task = asyncio.create_task(_session_expiry_loop())
+    else:
+        LOGGER.info("session-expiry sweeper disabled "
+                    "(USSD_SESSION_EXPIRY_NOTIFY=0)")
     LOGGER.info("ussd-gateway-tz started — adapters loaded: %s",
                 sorted(REGISTRY.keys()))
     try:
         yield
     finally:
-        # Shut down in reverse: stop taking new work, then drain the
+        # Shut down in reverse: stop the sweeper BEFORE the httpx client
+        # it posts through, then stop taking new work, then drain the
         # log writer (its remaining rows), then release the PG pool.
+        if expiry_task is not None:
+            expiry_task.cancel()
+            try:
+                await expiry_task
+            except asyncio.CancelledError:
+                pass
         await close_forwarder()
         close_log_writer()
         close_pool()
@@ -516,6 +535,159 @@ async def _handle_ussd(req: Request, operator_key: str) -> Response:
 
 
 # ---------- async-outbound helpers (Halotel) -----------------------
+
+# Cap on simultaneous expiry notifications per worker. A tick can claim
+# up to expiry.batch sessions; firing all of them at once would open
+# that many handler connections in one burst. Handlers answer in tens of
+# milliseconds, so a small window drains a full batch quickly while
+# keeping the gateway a polite client.
+_EXPIRY_NOTIFY_CONCURRENCY = 8
+
+
+async def _notify_session_expired(es) -> None:
+    """Tell a handler the gateway declared one of its sessions dead.
+
+    The cache row is ALREADY gone — claim_expired_sessions() deleted it
+    to win the right to send this. So there is nothing to expire here
+    and nothing to answer: no MNO is waiting on a response, because no
+    MNO sent anything. This is the gateway talking on its own initiative.
+    """
+    ur = UnifiedRequest(
+        operator=es.operator_name,
+        msisdn=es.msisdn,
+        session_id=es.session_id,
+        service_code=es.service_code,
+        ussd_string=es.ussd_string,
+        event=SessionEvent.SESSION_EXPIRED,
+        # Synthetic: there is no MNO request behind this leg. Marked so
+        # a handler (and anyone reading ussd_session_logs) can tell it
+        # apart from a wire-sourced terminal event at a glance.
+        raw_payload={
+            "_source": "gateway_session_expiry",
+            "idle_secs": _SETTINGS.expiry.idle_secs,
+            "last_seen_at": str(es.last_seen_at),
+        },
+        shortcode_id=es.shortcode_id,
+    )
+
+    sc = None
+    if es.service_code:
+        try:
+            sc = await asyncio.to_thread(
+                resolve_shortcode, es.operator_name, es.service_code)
+        except Exception:
+            LOGGER.exception("session-expiry resolve failed session=%s",
+                             es.session_id)
+            return
+
+    skip_reason = _terminal_notify_skip_reason(sc)
+    if skip_reason is not None:
+        _log_session_expired(es, None, None, skip_reason)
+        return
+
+    try:
+        outcome = await forward(
+            sc, ur, default_timeout_secs=_SETTINGS.handler_default_timeout_secs,
+        )
+    except Exception:
+        LOGGER.exception("session-expiry notify raised shortcode=%s session=%s",
+                         sc.code, es.session_id)
+        return
+    _log_session_expired(es, sc, outcome, None)
+
+
+def _log_session_expired(es, sc, outcome, skip_reason: Optional[str]) -> None:
+    """One log row per expired session, notified or not, so the
+    population is countable either way."""
+    try:
+        log_leg(
+            operator_id=es.operator_id, operator_name=es.operator_name,
+            shortcode_id=(sc.id if sc is not None else es.shortcode_id),
+            service_code=es.service_code,
+            session_id=es.session_id, msisdn=es.msisdn,
+            ussd_string=es.ussd_string,
+            # No new `direction` value: the CHECK constraint in db/001
+            # allows inbound|response|async_outbound and widening it
+            # would need a migration plus every dashboard filter that
+            # switches on it. These rows are identified by
+            # handler_response_text='session_expired' and by
+            # raw_payload._source instead.
+            direction="inbound",
+            raw_request_payload={
+                "_source": "gateway_session_expiry",
+                "last_seen_at": str(es.last_seen_at),
+            },
+            raw_response_payload=(outcome.raw_response_payload if outcome else None),
+            handler_url=(sc.handler_url if sc is not None and outcome else None),
+            handler_status_code=(outcome.status_code if outcome else None),
+            handler_response_action=None,       # nothing was rendered to anyone
+            handler_response_text=SessionEvent.SESSION_EXPIRED.value,
+            handler_elapsed_ms=(outcome.elapsed_ms if outcome else None),
+            error_class=(outcome.error_class if outcome else None),
+            error_detail=(
+                f"handler not notified: {skip_reason}" if skip_reason
+                else (outcome.error_detail if outcome else None)
+            ),
+        )
+    except Exception:
+        LOGGER.exception("session-expiry log_leg failed session=%s", es.session_id)
+
+
+async def _expire_idle_sessions_once() -> int:
+    """One sweep tick. Returns how many sessions were claimed."""
+    cfg = _SETTINGS.expiry
+    # psycopg2 is blocking and every route here is `async def`, so this
+    # goes to a thread rather than stalling the event loop for the
+    # duration of the claim.
+    claimed = await asyncio.to_thread(
+        claim_expired_sessions, cfg.idle_secs, cfg.notify_max_age_secs, cfg.batch,
+    )
+    if not claimed:
+        return 0
+
+    sem = asyncio.Semaphore(_EXPIRY_NOTIFY_CONCURRENCY)
+
+    async def _one(es):
+        async with sem:
+            await _notify_session_expired(es)
+
+    # gather, not fire-and-forget: the tick must finish its batch before
+    # sleeping, so ticks can never overlap and pile up.
+    await asyncio.gather(*(_one(es) for es in claimed), return_exceptions=True)
+    return len(claimed)
+
+
+async def _session_expiry_loop() -> None:
+    """Declare inactive sessions dead and tell their handlers.
+
+    Only Vodacom and Halotel signal a terminal event on the wire; Airtel
+    and Tigo signal nothing at all, so before this loop a subscriber who
+    walked away mid-menu left the handler holding state forever. Here
+    inactivity itself is the signal, which works for all four.
+    """
+    cfg = _SETTINGS.expiry
+    LOGGER.info(
+        "session-expiry sweeper started — idle>%ds, notify only if age<=%ds, "
+        "every ~%ds, batch %d",
+        cfg.idle_secs, cfg.notify_max_age_secs, cfg.sweep_interval_secs,
+        cfg.batch,
+    )
+    while True:
+        try:
+            n = await _expire_idle_sessions_once()
+            if n:
+                LOGGER.info("session-expiry: expired %d session(s)", n)
+        except asyncio.CancelledError:
+            LOGGER.info("session-expiry sweeper stopping")
+            raise
+        except Exception:
+            # Never let one bad tick kill the loop.
+            LOGGER.exception("session-expiry tick failed — retrying next cycle")
+        # Jitter: several workers (and containers) run this loop, and
+        # they all start within milliseconds of each other at boot.
+        # Spreading the ticks keeps them off the same instant.
+        await asyncio.sleep(cfg.sweep_interval_secs * (0.75 + random.random() * 0.5))
+
 
 def _terminal_notify_skip_reason(sc) -> Optional[str]:
     """None when a terminal event should be forwarded to `sc`'s handler,

@@ -89,13 +89,25 @@ TASKS_INTRADAY: list[tuple[str, str]] = [
         "refresh_today_session_summary_mv()",
     ),
     (
-        # Drop ussd_active_sessions rows idle > 10 minutes. db/002
-        # specified this sweeper and nothing implemented it, so the
-        # table had grown to 2.88M rows holding 46 live sessions --
-        # a large PK index competing for shared_buffers on the two
-        # blocking calls every USSD leg makes. A USSD session idle
-        # for 10 minutes is dead by definition: MNO gateway TTLs run
-        # 30-120s in practice.
+        # Backstop sweeper for ussd_active_sessions. db/002 specified
+        # this and nothing implemented it, so the table had grown to
+        # 2.88M rows holding 46 live sessions -- a large PK index
+        # competing for shared_buffers on the two blocking calls every
+        # USSD leg makes.
+        #
+        # 60 minutes, NOT the 10-minute expiry, and the distinction is
+        # load-bearing. The gateway process now expires idle sessions
+        # itself at USSD_SESSION_IDLE_EXPIRY_SECS (default 600) and
+        # NOTIFIES the handler for each one (main.py
+        # _session_expiry_loop). If this SQL sweeper also deleted at
+        # 10 minutes it would race the gateway and silently win some
+        # of those rows, and the handler would never hear about them.
+        #
+        # At 60 minutes the two cannot overlap in practice: anything
+        # still here an hour after its last leg is a row the gateway
+        # loop did not get to -- it was down, or lagging, or the row
+        # predates the feature. Those are exactly the rows that should
+        # be dropped WITHOUT a notification, which is what this does.
         #
         # Deletes in committed batches of 20k, capped at 200 batches
         # (4M rows) per run so one tick can never run unbounded. In
@@ -105,8 +117,8 @@ TASKS_INTRADAY: list[tuple[str, str]] = [
         # The INOUT parameter is passed explicitly as NULL so the CALL
         # returns a row and the count lands in the scheduler log.
         # See db/032.
-        "CALL sweep_active_sessions(10, 20000, 200, NULL)",
-        "sweep_active_sessions(idle>10min)",
+        "CALL sweep_active_sessions(60, 20000, 200, NULL)",
+        "sweep_active_sessions(idle>60min, backstop)",
     ),
 ]
 
