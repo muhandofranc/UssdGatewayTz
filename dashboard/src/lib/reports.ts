@@ -66,9 +66,31 @@ function buildWhere(
   filters: ReportFilters,
   acl: ShortcodeAcl,
 ): BuiltClause {
-  const conds: string[] = [];
   const params: any[] = [];
   const next = (v: any) => { params.push(v); return `$${params.length}`; };
+  const conds = legConds(filters, acl, next);
+  return {
+    sql: conds.length ? ` WHERE ${conds.join(" AND ")}` : "",
+    params,
+  };
+}
+
+/**
+ * The leg-level predicates behind buildWhere, against a caller-owned
+ * parameter list so two predicate sets can share one query.
+ *
+ * `padSecs` widens the date range on both sides. buildSessionWhere
+ * uses it for the outer leg set so a session that started just before
+ * `from`, or ran past the end of `to`, keeps its legs on both sides of
+ * the edge.
+ */
+function legConds(
+  filters: ReportFilters,
+  acl: ShortcodeAcl,
+  next: (v: any) => string,
+  padSecs = 0,
+): string[] {
+  const conds: string[] = [];
 
   // Per-row access control — the most important predicate. Carries the
   // per-shortcode time floor, so a re-allocated shortcode never shows
@@ -77,8 +99,10 @@ function buildWhere(
     conds.push(aclClause(acl, { scCol: "shortcode_id", tsCol: "ts", grain: "ts", push: next }));
   }
 
-  if (filters.fromTs) conds.push(`ts >= ${next(filters.fromTs)}::timestamptz`);
-  if (filters.toTs)   conds.push(`ts <  (${next(filters.toTs)}::date + interval '1 day')`);
+  const pad = padSecs ? ` - interval '${padSecs} seconds'` : "";
+  const padEnd = padSecs ? ` + interval '${padSecs} seconds'` : "";
+  if (filters.fromTs) conds.push(`ts >= (${next(filters.fromTs)}::timestamptz${pad})`);
+  if (filters.toTs)   conds.push(`ts <  (${next(filters.toTs)}::date + interval '1 day'${padEnd})`);
   if (filters.msisdn) conds.push(`msisdn = ${next(filters.msisdn)}`);
   if (filters.sessionId) conds.push(`session_id = ${next(filters.sessionId)}`);
 
@@ -101,10 +125,61 @@ function buildWhere(
     conds.push(`error_class = ${next(filters.errorClass)}`);
   }
 
-  return {
-    sql: conds.length ? ` WHERE ${conds.join(" AND ")}` : "",
-    params,
-  };
+  return conds;
+}
+
+/** Filters that pick particular LEGS out of a session. Date range and
+ *  operator apply to every leg of a session alike, so they never split
+ *  one; these do. */
+function selectsSessionsByLeg(f: ReportFilters): boolean {
+  return Boolean(
+    f.msisdn || f.sessionId ||
+    (f.shortcodeIds && f.shortcodeIds.length) ||
+    (f.errorClass && f.errorClass !== "any"),
+  );
+}
+
+/** How far past the date range a selected session's legs are still
+ *  read. Sessions last minutes; an hour covers them with room to spare
+ *  without pulling in a reused Vodacom session id from another day. */
+const SESSION_EDGE_PAD_SECS = 3600;
+
+/**
+ * WHERE clause for PER-SESSION aggregates (the /sessions rows and the
+ * billable summary): the filters choose WHICH sessions, then every leg
+ * of those sessions is aggregated.
+ *
+ * buildWhere alone filters legs, so an aggregate over it summarised
+ * only the matching legs: filtering on an error class turned a 3-leg,
+ * 66s session into "1 leg, 0s", and durations and billable units on
+ * any filtered view were wrong. Here the filters become a semi-join
+ * on (session_id, operator_name), and the outer leg set keeps only
+ * the predicates every leg of a session shares -- access control,
+ * operator, and the date range, padded so partition pruning still
+ * applies.
+ *
+ * Unfiltered views (date / operator only) skip the semi-join: there
+ * the two forms are the same and the plain one is cheaper.
+ */
+function buildSessionWhere(
+  filters: ReportFilters,
+  acl: ShortcodeAcl,
+): BuiltClause {
+  if (!selectsSessionsByLeg(filters)) return buildWhere(filters, acl);
+
+  const params: any[] = [];
+  const next = (v: any) => { params.push(v); return `$${params.length}`; };
+  const selected = legConds(filters, acl, next);
+  const outer = legConds(
+    { fromTs: filters.fromTs, toTs: filters.toTs, operators: filters.operators },
+    acl, next, SESSION_EDGE_PAD_SECS,
+  );
+  outer.push(
+    `(session_id, operator_name) IN (
+       SELECT session_id, operator_name FROM ussd_session_logs
+        WHERE ${selected.join(" AND ")})`,
+  );
+  return { sql: ` WHERE ${outer.join(" AND ")}`, params };
 }
 
 export interface ReportPage {
@@ -191,7 +266,7 @@ export async function loadBillableSummary(
   filters: ReportFilters,
   acl: ShortcodeAcl,
 ): Promise<BillableSummary> {
-  const where = buildWhere(filters, acl);
+  const where = buildSessionWhere(filters, acl);
 
   // Per-(session, operator) duration, then group by operator and
   // compute totals against each operator's configured window.
@@ -259,10 +334,12 @@ export async function loadBillableSummary(
  *  A session with exactly one leg has duration_secs = 0.
  *  vodacom_billable_units = FLOOR(duration_secs / 20) + 1   (vodacom only)
  *
- *  Filters apply at the LEG level (a session is included if any of
- *  its legs match), so date-range filters still surface a session
- *  even if only its last leg falls inside the window. That matches
- *  the "show me what was happening yesterday" mental model.
+ *  Filters SELECT sessions at the leg level (a session is included if
+ *  any of its legs match), then the row is aggregated over ALL of that
+ *  session's legs -- buildSessionWhere. A date-range filter still
+ *  surfaces a session even if only its last leg falls inside the
+ *  window, which matches the "show me what was happening yesterday"
+ *  mental model.
  * ----------------------------------------------------------------*/
 
 /** A single HTTP leg returned by the lazy-fetch /api/sessions/legs.
@@ -476,7 +553,11 @@ export async function loadSessionPage(
 ): Promise<SessionPage> {
   const ps = Math.max(1, Math.min(MAX_PAGE_SIZE, pageSize));
   const offset = Math.max(0, (page - 1) * ps);
+  // `where` picks legs: right for COUNTING sessions (a session counts
+  // when any of its legs matches). `sessionWhere` is what the rows
+  // aggregate over: every leg of those sessions -- see buildSessionWhere.
   const where = buildWhere(filters, acl);
+  const sessionWhere = buildSessionWhere(filters, acl);
 
   // Bounded count of DISTINCT sessions matching the filter set. Two
   // paths: FAST via daily_session_summary (db/015) when the filter
@@ -555,7 +636,7 @@ export async function loadSessionPage(
           ORDER BY (msisdn IS NULL), ts DESC
           ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
         ) AS msisdn
-        FROM ussd_session_logs l${where.sql}
+        FROM ussd_session_logs l${sessionWhere.sql}
         WINDOW w AS (PARTITION BY session_id, operator_name)
         ORDER BY session_id, operator_name, ts DESC NULLS LAST
     )
@@ -589,7 +670,7 @@ export async function loadSessionPage(
     ORDER BY g.last_ts DESC, g.session_id DESC
     LIMIT ${ps} OFFSET ${offset}
   `;
-  const rowsR = await reportQuery<SessionRow>(rowsSql, where.params);
+  const rowsR = await reportQuery<SessionRow>(rowsSql, sessionWhere.params);
   return { rows: rowsR.rows, totalKnown, totalCapped };
 }
 
