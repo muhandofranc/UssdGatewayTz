@@ -22,7 +22,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Mapping, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras
@@ -321,9 +321,16 @@ class ExpiredSession:
 
 def claim_expired_sessions(
     idle_secs: int, max_age_secs: int, limit: int,
+    idle_secs_by_operator: Optional[Mapping[str, int]] = None,
 ) -> list[ExpiredSession]:
-    """Atomically CLAIM up to `limit` sessions idle longer than
-    `idle_secs`, deleting them and returning what they held.
+    """Atomically CLAIM up to `limit` sessions idle longer than their
+    operator's limit, deleting them and returning what they held.
+
+    The limit is `idle_secs_by_operator[operators.name]`, falling back to
+    `idle_secs` for an operator with no entry. The first last_seen_at
+    predicate is the smallest of those limits: it is the one the
+    last_seen_at index can range-scan, and the per-operator predicate
+    then filters within it.
 
     Claim, not read-then-delete: the DELETE ... RETURNING is what makes
     the notification exactly-once. Several gateway workers (and several
@@ -344,13 +351,16 @@ def claim_expired_sessions(
     """
     sql = """
         WITH victims AS (
-            SELECT session_id, operator_id
-              FROM ussd_active_sessions
-             WHERE last_seen_at <  now() - make_interval(secs => %(idle)s)
-               AND last_seen_at >= now() - make_interval(secs => %(max_age)s)
-             ORDER BY last_seen_at
+            SELECT a.session_id, a.operator_id
+              FROM ussd_active_sessions a
+              JOIN operators o ON o.id = a.operator_id
+             WHERE a.last_seen_at <  now() - make_interval(secs => %(min_idle)s)
+               AND a.last_seen_at <  now() - make_interval(secs =>
+                       COALESCE((%(per_op)s::jsonb ->> o.name)::int, %(idle)s))
+               AND a.last_seen_at >= now() - make_interval(secs => %(max_age)s)
+             ORDER BY a.last_seen_at
              LIMIT %(limit)s
-             FOR UPDATE SKIP LOCKED
+             FOR UPDATE OF a SKIP LOCKED
         ), claimed AS (
             DELETE FROM ussd_active_sessions a
              USING victims v
@@ -366,8 +376,10 @@ def claim_expired_sessions(
           JOIN operators o ON o.id = c.operator_id
     """
     with _conn() as c, c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        per_op = dict(idle_secs_by_operator or {})
         cur.execute(sql, {"idle": idle_secs, "max_age": max_age_secs,
-                          "limit": limit})
+                          "limit": limit, "per_op": json.dumps(per_op),
+                          "min_idle": min([idle_secs, *per_op.values()])})
         rows = cur.fetchall()
     return [ExpiredSession(**dict(r)) for r in rows]
 

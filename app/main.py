@@ -564,7 +564,7 @@ async def _notify_session_expired(es) -> None:
         # apart from a wire-sourced terminal event at a glance.
         raw_payload={
             "_source": "gateway_session_expiry",
-            "idle_secs": _SETTINGS.expiry.idle_secs,
+            "idle_secs": _SETTINGS.expiry.idle_secs_for(es.operator_name),
             "last_seen_at": str(es.last_seen_at),
         },
         shortcode_id=es.shortcode_id,
@@ -641,6 +641,7 @@ async def _expire_idle_sessions_once() -> int:
     # duration of the claim.
     claimed = await asyncio.to_thread(
         claim_expired_sessions, cfg.idle_secs, cfg.notify_max_age_secs, cfg.batch,
+        cfg.idle_secs_by_operator,
     )
     if not claimed:
         return 0
@@ -667,10 +668,12 @@ async def _session_expiry_loop() -> None:
     """
     cfg = _SETTINGS.expiry
     LOGGER.info(
-        "session-expiry sweeper started — idle>%ds, notify only if age<=%ds, "
-        "every ~%ds, batch %d",
-        cfg.idle_secs, cfg.notify_max_age_secs, cfg.sweep_interval_secs,
-        cfg.batch,
+        "session-expiry sweeper started — idle>%ds (per operator: %s), "
+        "notify only if age<=%ds, every ~%ds, batch %d",
+        cfg.idle_secs,
+        ", ".join(f"{op}={s}s" for op, s in sorted(cfg.idle_secs_by_operator.items()))
+        or "none",
+        cfg.notify_max_age_secs, cfg.sweep_interval_secs, cfg.batch,
     )
     while True:
         try:

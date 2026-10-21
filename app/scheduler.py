@@ -97,7 +97,8 @@ TASKS_INTRADAY: list[tuple[str, str]] = [
         #
         # 60 minutes, NOT the 10-minute expiry, and the distinction is
         # load-bearing. The gateway process now expires idle sessions
-        # itself at USSD_SESSION_IDLE_EXPIRY_SECS (default 600) and
+        # itself at its per-operator idle limit (USSD_SESSION_IDLE_
+        # EXPIRY_SECS[_<OPERATOR>], minutes at most) and
         # NOTIFIES the handler for each one (main.py
         # _session_expiry_loop). If this SQL sweeper also deleted at
         # 10 minutes it would race the gateway and silently win some

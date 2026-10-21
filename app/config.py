@@ -8,7 +8,8 @@ documents what each key does for operators copying it to `.env`.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Mapping
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -21,6 +22,23 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_int(name: str, default: int) -> int:
     v = os.environ.get(name, "").strip()
     return int(v) if v else default
+
+
+_IDLE_PER_OPERATOR_PREFIX = "USSD_SESSION_IDLE_EXPIRY_SECS_"
+
+
+def _idle_secs_by_operator() -> dict[str, int]:
+    """USSD_SESSION_IDLE_EXPIRY_SECS_<OPERATOR>=<secs> -> {operator: secs}.
+    Read by prefix, so an operator added later needs no code change here
+    (its compose file still has to pass the variable through). Empty
+    values are skipped: that operator uses the default."""
+    out: dict[str, int] = {}
+    for name, value in os.environ.items():
+        if name.startswith(_IDLE_PER_OPERATOR_PREFIX) and value.strip():
+            op = name[len(_IDLE_PER_OPERATOR_PREFIX):].lower()
+            if op:
+                out[op] = int(value.strip())
+    return out
 
 
 def _env_float(name: str, default: float) -> float:
@@ -83,8 +101,8 @@ class HalotelConfig:
 
 @dataclass(frozen=True)
 class SessionExpiryConfig:
-    """Global inactive-USSD-session expiry, and the notification the
-    gateway sends the handler when it fires.
+    """Inactive-USSD-session expiry, per operator, and the notification
+    the gateway sends the handler when it fires.
 
     Only Vodacom (TruRoute 3/4/10) and Halotel (102/104) signal a
     terminal event on the wire. Airtel and Tigo signal nothing, so a
@@ -113,6 +131,31 @@ class SessionExpiryConfig:
         event at all, so this is the only thing that ends their
         sessions, and it will cut a real subscriber off mid-menu if it
         fires while they are still typing.
+
+        This is the DEFAULT; idle_secs_by_operator overrides it per
+        operator. Use idle_secs_for(), not this field, to get the limit
+        that actually applies to a session.
+
+    idle_secs_by_operator
+        Per-operator override of idle_secs, keyed by operators.name
+        (lowercase), from USSD_SESSION_IDLE_EXPIRY_SECS_<OPERATOR>. One
+        value cannot fit every network because their own TTLs differ.
+        Measured on production legs (2026-10-03, 7 days, plus
+        2026-10-21 cut-offs):
+
+            vodacom  ends the session ITSELF at exactly 60s idle, and
+                     reports it as type=3 (user_cancelled), not type=4.
+                     At or below 60 the gateway races it: the loser
+                     writes a second terminal row, and when the gateway
+                     wins, the late type=3 finds no cache row and the
+                     handler is never told. Keep it above 60 (75) so
+                     Vodacom's own end always lands first.
+            airtel   no terminal event; longest observed gap 96s.
+            halotel  longest observed gap 91s.
+            tigo     no terminal event; longest observed gap 120.1s,
+                     which looks like Tigo's hard TTL. Effective expiry
+                     is idle .. idle + sweep_interval_secs, so 120 can
+                     still cut a 120s reply; use 130.
 
     notify_max_age_secs
         The BACKLOG GUARD, and the reason this is safe to switch on
@@ -143,6 +186,29 @@ class SessionExpiryConfig:
     notify_max_age_secs: int
     sweep_interval_secs: int
     batch: int
+    idle_secs_by_operator: Mapping[str, int] = field(default_factory=dict)
+
+    def idle_secs_for(self, operator_name: str) -> int:
+        """The idle limit that applies to `operator_name`'s sessions."""
+        return self.idle_secs_by_operator.get(
+            (operator_name or "").lower(), self.idle_secs)
+
+    def __post_init__(self) -> None:
+        # A bad value here does not fail loudly on its own: idle <= 0
+        # expires every session on its first sweep, and an idle limit at
+        # or above notify_max_age_secs means that operator's sessions are
+        # never claimed (the backlog guard skips them) -- expiry silently
+        # off for one network. Refuse to start instead.
+        limits = {"default": self.idle_secs, **self.idle_secs_by_operator}
+        for op, secs in limits.items():
+            if secs <= 0:
+                raise ValueError(
+                    f"session expiry: idle limit for {op} must be > 0, got {secs}")
+            if secs >= self.notify_max_age_secs:
+                raise ValueError(
+                    f"session expiry: idle limit for {op} ({secs}s) must be "
+                    f"below USSD_SESSION_EXPIRY_NOTIFY_MAX_AGE_SECS "
+                    f"({self.notify_max_age_secs}s)")
 
 
 @dataclass(frozen=True)
@@ -190,11 +256,12 @@ def load() -> Settings:
         ),
         expiry=SessionExpiryConfig(
             enabled=_env_bool("USSD_SESSION_EXPIRY_NOTIFY", True),
-            idle_secs=_env_int("USSD_SESSION_IDLE_EXPIRY_SECS", 30),
+            idle_secs=_env_int("USSD_SESSION_IDLE_EXPIRY_SECS", 130),
             notify_max_age_secs=_env_int(
                 "USSD_SESSION_EXPIRY_NOTIFY_MAX_AGE_SECS", 3600
             ),
             sweep_interval_secs=_env_int("USSD_SESSION_EXPIRY_SWEEP_SECS", 5),
             batch=_env_int("USSD_SESSION_EXPIRY_BATCH", 200),
+            idle_secs_by_operator=_idle_secs_by_operator(),
         ),
     )
