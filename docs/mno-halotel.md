@@ -61,9 +61,9 @@ Halotel's USSDGW callback URL (`HALOTEL_OUTBOUND_URL`).
 |--------------------|----------------------------------------|------------------------|--------------------|
 | `100`              | First USSD request (msg = dialed code) | `START`               | resolve shortcode, forward to handler, push outbound `202`/`201` |
 | `101`              | User input / menu selection            | `INPUT`               | resolve shortcode, forward to handler, push outbound `200`/`203` |
-| `102`              | User cancelled                         | `USER_CANCELLED`      | terminal — expire session, ack inbound, NO outbound push |
+| `102`              | User cancelled                         | `USER_CANCELLED_SESSION` | terminal — expire session, ack inbound, NO outbound push |
 | `103`              | Menu reached the user (delivery ack)   | `DELIVERY_ACK`        | ack inbound + log only. NOT terminal — session stays alive. |
-| `104`              | Transaction error, must cancel         | `TIMEOUT`             | terminal — expire session, ack inbound, NO outbound push |
+| `104`              | Transaction error, must cancel         | `PROVIDER_SESSION_TERMINATION` | terminal — expire session, ack inbound, NO outbound push |
 
 ### Inbound ack we return
 

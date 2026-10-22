@@ -29,19 +29,25 @@ class SessionEvent(str, Enum):
                      map here).
     * INPUT          subsequent leg, msg carries the user's input
                      (Vodacom TruRoute type=2).
-    * USER_CANCELLED user pressed cancel / hung up (Vodacom type=3).
-                     Terminal — MNO is acked immediately and the
-                     handler is notified out of band.
-    * TIMEOUT        MNO closed the session (Vodacom type=4). Terminal.
-    * CHARGE_FAILED  premium-rate charge attempt failed (Vodacom
-                     type=10). Terminal.
+    * USER_CANCELLED_SESSION
+                     the subscriber pressed cancel / hung up (Vodacom
+                     type=3, Halotel 102). Terminal — MNO is acked
+                     immediately and the handler is notified out of
+                     band. Vodacom also sends type=3 when its own 60s
+                     idle cut-off fires; the Vodacom adapter relabels
+                     that case PROVIDER_SESSION_TERMINATION.
+    * PROVIDER_SESSION_TERMINATION
+                     the MNO ended the session itself: timeout
+                     (Vodacom type=4, Halotel 104) or a failed
+                     premium-rate charge (Vodacom type=10). Terminal.
     * DELIVERY_ACK   informational delivery receipt from the MNO
                      (Halotel type=103 — "menu reached the user").
                      NOT terminal — the session is still alive.
                      Pipeline: no handler forward, no session
                      expire, just inbound ack + log.
 
-    The TERMINAL subset is { USER_CANCELLED, TIMEOUT, CHARGE_FAILED }.
+    The TERMINAL subset is { USER_CANCELLED_SESSION,
+    PROVIDER_SESSION_TERMINATION }.
     The pipeline acks the MNO with a no-content END and expires the
     session, then notifies the handler fire-and-forget so it can
     release whatever it held for that session. The handler's reply is
@@ -57,33 +63,32 @@ class SessionEvent(str, Enum):
     """
     START          = "start"
     INPUT          = "input"
-    USER_CANCELLED = "user_cancelled"
-    TIMEOUT        = "timeout"
-    CHARGE_FAILED  = "charge_failed"
+    USER_CANCELLED_SESSION       = "user_cancelled_session"
+    PROVIDER_SESSION_TERMINATION = "provider_session_termination"
     DELIVERY_ACK   = "delivery_ack"
     # Gateway-generated, never parsed off any MNO wire: no leg has
     # arrived for this session in `expiry.idle_secs`, so the gateway
     # declares it dead, drops the cache row and tells the handler.
     # This is the ONLY terminal signal Airtel and Tigo sessions can
     # produce -- neither aggregator sends cancel or timeout at all.
-    SESSION_EXPIRED = "session_expired"
+    SYSTEM_SESSION_TERMINATION = "system_session_termination"
 
 
 TERMINAL_EVENTS = frozenset({
-    SessionEvent.USER_CANCELLED,
-    SessionEvent.TIMEOUT,
-    SessionEvent.CHARGE_FAILED,
+    SessionEvent.USER_CANCELLED_SESSION,
+    SessionEvent.PROVIDER_SESSION_TERMINATION,
 })
 
 # Events that never reach the handler at all. Terminal events used to
 # be in here; they are now notified fire-and-forget (main.py 2c), so
 # DELIVERY_ACK is all that remains.
 # Everything that means "this session is over", whatever declared it.
-# TERMINAL_EVENTS is what an MNO signalled on the wire; SESSION_EXPIRED
-# is the gateway's own idle-timeout. Keep the two distinct: only the
+# TERMINAL_EVENTS is what an MNO signalled on the wire;
+# SYSTEM_SESSION_TERMINATION is the gateway's own idle-timeout. Keep
+# the two distinct: only the
 # wire-sourced set may drive the inbound pipeline branch in main.py,
 # because only those arrive as an actual HTTP leg to answer.
-SESSION_ENDED_EVENTS = TERMINAL_EVENTS | frozenset({SessionEvent.SESSION_EXPIRED})
+SESSION_ENDED_EVENTS = TERMINAL_EVENTS | frozenset({SessionEvent.SYSTEM_SESSION_TERMINATION})
 
 NO_FORWARD_EVENTS = frozenset({SessionEvent.DELIVERY_ACK})
 

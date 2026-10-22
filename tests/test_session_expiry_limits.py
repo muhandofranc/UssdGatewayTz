@@ -1,7 +1,7 @@
 """Per-operator idle-session limits.
 
 One gateway-wide limit could not fit every network: Vodacom ends its own
-sessions at 60s (and reports it as user_cancelled), while Tigo keeps them
+sessions at 60s (and reports it as a type=3 cancel), while Tigo keeps them
 open to ~120s. These pin how USSD_SESSION_IDLE_EXPIRY_SECS_<OPERATOR> is
 read, how it falls back to the default, and the misconfigurations that
 must refuse to start rather than silently switch expiry off.

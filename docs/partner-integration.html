@@ -384,7 +384,6 @@ END Your balance: 1,250 TZS</pre>
 
 <!-- ============================== 5 ============================== -->
 <h2 id="lifecycle" class="pagebreak">5. Lifecycle — what <code>event</code> will I see?</h2>
-<p>The gateway only ever forwards two lifecycle events to your handler:</p>
 <table>
   <thead>
     <tr><th>event</th><th>When</th><th>What ussd_string is</th></tr>
@@ -392,17 +391,13 @@ END Your balance: 1,250 TZS</pre>
   <tbody>
     <tr><td><code>start</code></td><td>First leg — the user just dialed your code</td><td><code>""</code> (empty)</td></tr>
     <tr><td><code>input</code></td><td>Subsequent leg — the user pressed something on the previous menu</td><td>accumulated trail (e.g. <code>"1"</code>, <code>"1*2"</code>, <code>"1*2*9"</code>)</td></tr>
+    <tr><td><code>user_cancelled_session</code></td><td>The subscriber cancelled or hung up (Vodacom, Halotel)</td><td>trail as it stood when the session ended</td></tr>
+    <tr><td><code>provider_session_termination</code></td><td>The network ended the session: timeout, or a failed Vodacom premium-rate charge. Also Vodacom's own 60s idle cut-off, which it reports with the cancel code; the gateway relabels a cancel on a session idle 55s+</td><td>trail as it stood when the session ended</td></tr>
+    <tr><td><code>system_session_termination</code></td><td>No leg arrived for the network's idle limit, so the gateway expired the session (all networks; the only end signal Airtel and Tigo ever produce)</td><td>trail as it stood when the session ended</td></tr>
   </tbody>
 </table>
-<p><strong>You will NEVER see:</strong></p>
-<ul>
-  <li><code>user_cancelled</code> — the user pressed Cancel. The gateway acks the MNO directly and your session is silently gone.</li>
-  <li><code>timeout</code> — the MNO closed the session (took too long between legs).</li>
-  <li><code>charge_failed</code> (Vodacom premium-rate) — Vodacom's billing said no.</li>
-  <li>Halotel's <code>display_ack</code> (type=103) — informational; no need to act.</li>
-</ul>
 <div class="callout tip">
-  If you maintain server-side session state keyed by <code>session_id</code>, expire it after <strong>~2 minutes of inactivity</strong> (USSD sessions live ~60–90s typically). You won't get notified when a session ends without an <code>END</code> from you.
+  The three end-of-session events are notifications: the subscriber is already gone, your reply is discarded, and you get at most one per session (none if you already replied <code>END</code>). Check <code>event</code> before treating the body as user input. Halotel's <code>display_ack</code> (type=103) is never forwarded. Legacy-format handlers have no <code>event</code> key; they get <code>__USER_CANCELLED__</code>, <code>__TIMEOUT__</code> or <code>__SESSION_EXPIRED__</code> in place of <code>UssdString</code>.
 </div>
 
 <!-- ============================== 6 ============================== -->

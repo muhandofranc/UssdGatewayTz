@@ -137,20 +137,17 @@ USSD frames have a hard limit of ~182 characters (depends on MNO/handset). Keep 
 
 ## 5. Lifecycle — what `event` will I see?
 
-The gateway only ever forwards two lifecycle events to your handler:
-
 | `event` | When | What `ussd_string` is |
 |---|---|---|
 | `start` | First leg — the user just dialed your code | `""` (empty) |
 | `input` | Subsequent leg — the user pressed something on the previous menu | accumulated trail (e.g. `"1"`, `"1*2"`, `"1*2*9"`) |
+| `user_cancelled_session` | The subscriber cancelled or hung up (Vodacom, Halotel) | trail as it stood when the session ended |
+| `provider_session_termination` | The network ended the session: timeout, or a failed Vodacom premium-rate charge. Also Vodacom's own 60s idle cut-off, which it reports with the cancel code; the gateway relabels a cancel on a session idle 55s+ | trail as it stood when the session ended |
+| `system_session_termination` | No leg arrived for the network's idle limit, so the gateway expired the session (all networks; the only end signal Airtel and Tigo ever produce) | trail as it stood when the session ended |
 
-**You will NEVER see:**
-- `user_cancelled` — the user pressed Cancel. The gateway acks the MNO directly and your session is silently gone.
-- `timeout` — the MNO closed the session (took too long between legs).
-- `charge_failed` (Vodacom premium-rate) — Vodacom's billing said no.
-- Halotel's `display_ack` (type=103) — informational; no need to act.
+The three end-of-session events are notifications: the subscriber is already gone, your reply is discarded, and you get at most one per session (none if you already replied `END`). Check `event` before treating the body as user input. Halotel's `display_ack` (type=103) is never forwarded.
 
-If you maintain server-side session state keyed by `session_id`, you should expire it after **~2 minutes of inactivity** (USSD sessions live ~60–90s typically). You won't get notified when a session ends without an `END` from you.
+Legacy-format handlers (`payload_format=legacy`) have no `event` key; they get `__USER_CANCELLED__`, `__TIMEOUT__` or `__SESSION_EXPIRED__` in place of `UssdString`.
 
 ---
 

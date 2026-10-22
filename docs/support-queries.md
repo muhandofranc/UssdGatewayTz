@@ -71,10 +71,13 @@ and run it as is.
 
 | Value | Who ended it |
 |---|---|
-| `user_cancelled` | The network (Vodacom, Halotel). Note: Vodacom also sends this when **its own 60-second timeout** fires, not only when the subscriber cancels. |
-| `timeout` | The network reported a timeout or error. |
-| `charge_failed` | Vodacom premium charge failed. |
-| `session_expired` | **The gateway**, after the network's idle limit with no input. The application is notified. These rows have `raw_request_payload->>'_source' = 'gateway_session_expiry'`. |
+| `user_cancelled_session` | The subscriber cancelled (Vodacom, Halotel). |
+| `provider_session_termination` | The network ended it: a timeout, a failed Vodacom premium charge, or Vodacom's **own 60-second idle cut-off** (Vodacom reports that as a cancel; the gateway relabels a cancel on a session idle 55s or more). |
+| `system_session_termination` | **The gateway**, after the network's idle limit with no input. The application is notified. These rows have `raw_request_payload->>'_source' = 'gateway_session_expiry'`. |
+
+Rows logged before the rename carry the old values: `user_cancelled`
+(which included Vodacom's own cut-off), `timeout`, `charge_failed`
+and `session_expired`. The queries below match both.
 
 A session whose last row is a `CON` and has no terminal row simply
 stopped: the subscriber walked away and nothing has expired it yet.
@@ -334,7 +337,10 @@ SELECT operator_name, handler_response_text AS ended_by,
        count(*) AS sessions
   FROM ussd_session_logs
  WHERE direction = 'inbound'
-   AND handler_response_text IN ('user_cancelled', 'timeout', 'charge_failed', 'session_expired')
+   AND handler_response_text IN ('user_cancelled_session', 'provider_session_termination',
+                                 'system_session_termination',
+                                 -- before the rename
+                                 'user_cancelled', 'timeout', 'charge_failed', 'session_expired')
    AND ts >= now() - interval '24 hours'
  GROUP BY 1, 2
  ORDER BY 1, 3 DESC;
@@ -350,7 +356,7 @@ SELECT ts AT TIME ZONE 'Africa/Dar_es_Salaam' AS time_eat,
        operator_name, service_code, session_id,
        handler_status_code AS http, error_class, error_detail
   FROM ussd_session_logs
- WHERE handler_response_text = 'session_expired'
+ WHERE handler_response_text IN ('system_session_termination', 'session_expired')
    AND (handler_status_code IS DISTINCT FROM 200
         OR error_class IS NOT NULL
         OR error_detail LIKE 'handler not notified%')
@@ -374,7 +380,7 @@ too short.
 ```sql
 WITH s AS (
   SELECT session_id, operator_name,
-         min(ts) FILTER (WHERE handler_response_text = 'session_expired') AS expired_at,
+         min(ts) FILTER (WHERE handler_response_text IN ('system_session_termination', 'session_expired')) AS expired_at,
          max(ts) FILTER (WHERE error_class = 'shortcode_not_found')       AS rejected_at
     FROM ussd_session_logs
    WHERE ts >= now() - interval '24 hours'
@@ -401,8 +407,9 @@ SELECT operator_name, count(*) AS sessions
      WHERE ts >= now() - interval '24 hours'
        AND direction = 'inbound'
      GROUP BY 1, 2
-    HAVING bool_or(handler_response_text = 'session_expired')
-       AND bool_or(handler_response_text IN ('user_cancelled', 'timeout'))
+    HAVING bool_or(handler_response_text IN ('system_session_termination', 'session_expired'))
+       AND bool_or(handler_response_text IN ('user_cancelled_session', 'provider_session_termination',
+                                            'user_cancelled', 'timeout'))
   ) x
  GROUP BY 1;
 ```

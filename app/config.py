@@ -144,7 +144,7 @@ class SessionExpiryConfig:
         2026-10-21 cut-offs):
 
             vodacom  ends the session ITSELF at exactly 60s idle, and
-                     reports it as type=3 (user_cancelled), not type=4.
+                     reports it as type=3 (a cancel), not type=4.
                      At or below 60 the gateway races it: the loser
                      writes a second terminal row, and when the gateway
                      wins, the late type=3 finds no cache row and the

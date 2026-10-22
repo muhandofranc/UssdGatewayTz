@@ -243,6 +243,10 @@ class ActiveSession:
     shortcode_id: Optional[int]
     msisdn: Optional[str]
     ussd_string: str
+    # Seconds since the last leg, computed by Postgres so app/DB clock
+    # skew cannot distort it. Vodacom uses it to tell its own idle
+    # cut-off from a real cancel (adapters/vodacom.py).
+    idle_secs: Optional[float] = None
 
 
 def get_active_session(session_id: str, operator_id: int) -> Optional[ActiveSession]:
@@ -252,7 +256,8 @@ def get_active_session(session_id: str, operator_id: int) -> Optional[ActiveSess
     first leg may not have arrived yet, or the cache row was swept)."""
     sql = """
         SELECT session_id, operator_id, service_code, shortcode_id,
-               msisdn, ussd_string
+               msisdn, ussd_string,
+               EXTRACT(EPOCH FROM now() - last_seen_at)::float8 AS idle_secs
           FROM ussd_active_sessions
          WHERE session_id = %s AND operator_id = %s
          LIMIT 1

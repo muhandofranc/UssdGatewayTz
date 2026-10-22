@@ -44,9 +44,9 @@ Inbound requestType mapping
 |--------------------|-------------------------------|------------------------|--------------------|
 | `100`              | First USSD request (msg = dialed code) | `START`        | forward + push     |
 | `101`              | User input / menu selection            | `INPUT`        | forward + push     |
-| `102`              | User cancelled transaction              | `USER_CANCELLED` | terminal — ack, notify handler, no push |
+| `102`              | User cancelled transaction              | `USER_CANCELLED_SESSION` | terminal — ack, notify handler, no push |
 | `103`              | Display-ack (menu reached user)         | `DELIVERY_ACK` | ack only, no forward, no expire |
-| `104`              | Transaction error, must cancel          | `TIMEOUT`      | terminal — ack, notify handler, no push |
+| `104`              | Transaction error, must cancel          | `PROVIDER_SESSION_TERMINATION` | terminal — ack, notify handler, no push |
 
 Outbound requestType selection
 ------------------------------
@@ -140,9 +140,9 @@ _ESCAPED_BR_RE = re.compile(rb"&lt;\s*br\s*/?\s*&gt;", re.IGNORECASE)
 _TYPE_EVENT_MAP: dict[str, SessionEvent] = {
     "100": SessionEvent.START,
     "101": SessionEvent.INPUT,
-    "102": SessionEvent.USER_CANCELLED,
+    "102": SessionEvent.USER_CANCELLED_SESSION,
     "103": SessionEvent.DELIVERY_ACK,
-    "104": SessionEvent.TIMEOUT,
+    "104": SessionEvent.PROVIDER_SESSION_TERMINATION,
 }
 
 # Standard SOAP ack body — the only thing the inbound HTTP exchange
@@ -443,7 +443,8 @@ class Halotel:
                     ussd_string=ussd_string,
                 )
         else:
-            # USER_CANCELLED / DELIVERY_ACK / TIMEOUT — read cached
+            # USER_CANCELLED_SESSION / DELIVERY_ACK /
+            # PROVIDER_SESSION_TERMINATION — read cached
             # service_code + msisdn for log attribution, no state
             # mutation. Halotel also omits msisdn on these legs.
             prior = db.get_active_session(transactionid, op_id)

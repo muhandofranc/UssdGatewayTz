@@ -78,10 +78,19 @@ from .metrics import (
     USSD_HOP_TOTAL,
 )
 from .unified import (
-    Action, HandlerOutcome, SESSION_ENDED_EVENTS, UnifiedReply, UnifiedRequest,
+    Action, HandlerOutcome, SESSION_ENDED_EVENTS, SessionEvent, UnifiedReply,
+    UnifiedRequest,
 )
 
 LOGGER = logging.getLogger(__name__)
+
+# Legacy-format UssdString sentinel per end-of-session event. Frozen at
+# the pre-rename strings: legacy handlers already match on these.
+_LEGACY_SENTINELS = {
+    SessionEvent.USER_CANCELLED_SESSION:       "__USER_CANCELLED__",
+    SessionEvent.PROVIDER_SESSION_TERMINATION: "__TIMEOUT__",
+    SessionEvent.SYSTEM_SESSION_TERMINATION:   "__SESSION_EXPIRED__",
+}
 
 
 # ------------------------------------------------------------------
@@ -330,8 +339,14 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
         # channel available is `UssdString`. So on a terminal leg that
         # field carries a sentinel INSTEAD of the accumulated trail:
         #
-        #     __USER_CANCELLED__ / __TIMEOUT__ / __CHARGE_FAILED__
-        #     __SESSION_EXPIRED__  (gateway idle timeout)
+        #     __USER_CANCELLED__   user_cancelled_session
+        #     __TIMEOUT__          provider_session_termination
+        #     __SESSION_EXPIRED__  system_session_termination
+        #
+        # These predate the event renames and are kept as they were so
+        # legacy handlers need no change (_LEGACY_SENTINELS). A Vodacom
+        # charge failure is now a provider termination, so it arrives
+        # as __TIMEOUT__; __CHARGE_FAILED__ is no longer sent.
         #
         # Chosen deliberately over appending to the trail: '1*2*cancel'
         # is read as a menu selection by any handler that splits on '*',
@@ -352,7 +367,7 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
         # customer was when the session ended.
         ussd_string = ur.ussd_string
         if ur.event in SESSION_ENDED_EVENTS:
-            ussd_string = f"__{ur.event.value.upper()}__"
+            ussd_string = _LEGACY_SENTINELS[ur.event]
 
         return {
             "sessionId":       ur.session_id,
@@ -381,8 +396,10 @@ def build_handler_payload(sc: ShortcodeRow, ur: UnifiedRequest) -> dict:
         "service_code": ur.service_code,
         "ussd_string":  ur.ussd_string,
         # 'start' = first leg (msg was the dialed service code);
-        # 'input' = subsequent legs; 'user_cancelled' / 'timeout' /
-        # 'charge_failed' = a terminal event, delivered fire-and-forget
+        # 'input' = subsequent legs; 'user_cancelled_session' /
+        # 'provider_session_termination' = a terminal event, and
+        # 'system_session_termination' = the gateway's idle expiry, all
+        # delivered fire-and-forget
         # AFTER the MNO has been acked so the handler can release what
         # it was holding for the session. This field is the only thing
         # distinguishing that notification from a real leg, so a handler

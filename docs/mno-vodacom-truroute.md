@@ -53,9 +53,9 @@ premium charging.
 |---:|---|---|---|---|
 | `1`  | inbound  | REQUEST  | `START`           | `msg` carries the dialed service code (e.g. `*123#`). |
 | `2`  | inbound  | RESPONSE | `INPUT`           | `msg` is the user's input text for this leg. |
-| `3`  | inbound  | RELEASE  | `USER_CANCELLED`  | Terminal — gateway expires session, ACKs with empty `<type>3</type>`. |
-| `4`  | inbound  | TIMEOUT  | `TIMEOUT`         | Terminal — same handling as RELEASE. |
-| `10` | inbound  | CHARGE   | `CHARGE_FAILED`   | Premium-charge failure notification. Terminal. |
+| `3`  | inbound  | RELEASE  | `USER_CANCELLED_SESSION` | Terminal — gateway expires session, ACKs with empty `<type>3</type>`. Vodacom also sends this for its own 60s idle cut-off; on a session idle ≥55s the adapter relabels it `PROVIDER_SESSION_TERMINATION`. |
+| `4`  | inbound  | TIMEOUT  | `PROVIDER_SESSION_TERMINATION` | Terminal — same handling as RELEASE. |
+| `10` | inbound  | CHARGE   | `PROVIDER_SESSION_TERMINATION` | Premium-charge failure notification. Terminal. |
 | `2`  | outbound | RESPONSE | `Action.CON`      | Keep session open. |
 | `3`  | outbound | RELEASE  | `Action.END`      | Close session. |
 | `5`  | outbound | REDIRECT | _not yet exposed_ | Reroute to another service code. Extend `UnifiedReply` with `redirect_service_code` when a handler needs it. |
@@ -70,7 +70,7 @@ the missing context in `ussd_active_sessions`:
 |---|---|
 | `START`          | INSERT row keyed by `(session_id, operator_id)`. Stores `service_code` from the type=1 `msg`. `ussd_string` initialised empty. |
 | `INPUT`          | SELECT row → grab cached `service_code` + prior `ussd_string`; append this leg's `msg` (with `*` separator); UPSERT to refresh `last_seen_at`. |
-| `USER_CANCELLED` / `TIMEOUT` / `CHARGE_FAILED` | DELETE row. Pipeline short-circuits — no handler call. |
+| `USER_CANCELLED_SESSION` / `PROVIDER_SESSION_TERMINATION` | DELETE row. Handler notified fire-and-forget after the MNO ack. |
 | Handler returns `END` | DELETE row (session is over). |
 
 The sweeper (Phase 4 cron) removes rows whose `last_seen_at` is

@@ -88,10 +88,19 @@ from ._common import (
 _TYPE_EVENT_MAP: dict[str, SessionEvent] = {
     "1":  SessionEvent.START,
     "2":  SessionEvent.INPUT,
-    "3":  SessionEvent.USER_CANCELLED,
-    "4":  SessionEvent.TIMEOUT,
-    "10": SessionEvent.CHARGE_FAILED,
+    "3":  SessionEvent.USER_CANCELLED_SESSION,
+    "4":  SessionEvent.PROVIDER_SESSION_TERMINATION,
+    "10": SessionEvent.PROVIDER_SESSION_TERMINATION,
 }
+
+# Vodacom ends a session itself after 60s with no input, and reports
+# it as type=3 -- the same code as a subscriber pressing cancel. A
+# type=3 arriving on a session idle at least this long is taken to be
+# that cut-off. Measured from the last leg's arrival, so the handler's
+# reply time is already inside the gap; 55 leaves room for that and
+# for clock jitter. A real cancel after 55s+ of silence is mislabelled,
+# which is rare enough to accept.
+_PROVIDER_IDLE_CUTOFF_SECS = 55.0
 
 
 async def _parse_fields(req: Request) -> tuple[str, str, str, str, dict]:
@@ -214,10 +223,16 @@ class Vodacom:
                     msisdn=msisdn or prior.msisdn, ussd_string=ussd_string,
                 )
         else:
-            # Terminal event (USER_CANCELLED / TIMEOUT / CHARGE_FAILED).
-            # Look up the prior session for service_code so the log row
-            # is attributable; then the pipeline will expire it.
+            # Terminal event (USER_CANCELLED_SESSION /
+            # PROVIDER_SESSION_TERMINATION). Look up the prior session
+            # for service_code so the log row is attributable; then the
+            # pipeline will expire it.
             prior = db.get_active_session(sessionid, op_id)
+            if (event is SessionEvent.USER_CANCELLED_SESSION
+                    and prior is not None
+                    and prior.idle_secs is not None
+                    and prior.idle_secs >= _PROVIDER_IDLE_CUTOFF_SECS):
+                event = SessionEvent.PROVIDER_SESSION_TERMINATION
             service_code = (prior.service_code if prior else "")
             ussd_string  = (prior.ussd_string  if prior else (msg or ""))
             # Carry the cached shortcode id so the terminal log row is

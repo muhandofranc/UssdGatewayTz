@@ -341,7 +341,7 @@ async def _handle_ussd(req: Request, operator_key: str) -> Response:
         )
         return resp
 
-    # 2c. terminal events (user cancelled / timeout / charge failed).
+    # 2c. terminal events (user cancelled / provider ended the session).
     # The MNO has already torn down the session client-side, so there is
     # no reply to render and nothing the customer can still see. We ACK
     # the MNO immediately and notify the handler OUT OF BAND, so it can
@@ -558,7 +558,7 @@ async def _notify_session_expired(es) -> None:
         session_id=es.session_id,
         service_code=es.service_code,
         ussd_string=es.ussd_string,
-        event=SessionEvent.SESSION_EXPIRED,
+        event=SessionEvent.SYSTEM_SESSION_TERMINATION,
         # Synthetic: there is no MNO request behind this leg. Marked so
         # a handler (and anyone reading ussd_session_logs) can tell it
         # apart from a wire-sourced terminal event at a glance.
@@ -610,7 +610,7 @@ def _log_session_expired(es, sc, outcome, skip_reason: Optional[str]) -> None:
             # allows inbound|response|async_outbound and widening it
             # would need a migration plus every dashboard filter that
             # switches on it. These rows are identified by
-            # handler_response_text='session_expired' and by
+            # handler_response_text='system_session_termination' and by
             # raw_payload._source instead.
             direction="inbound",
             raw_request_payload={
@@ -621,7 +621,7 @@ def _log_session_expired(es, sc, outcome, skip_reason: Optional[str]) -> None:
             handler_url=(sc.handler_url if sc is not None and outcome else None),
             handler_status_code=(outcome.status_code if outcome else None),
             handler_response_action=None,       # nothing was rendered to anyone
-            handler_response_text=SessionEvent.SESSION_EXPIRED.value,
+            handler_response_text=SessionEvent.SYSTEM_SESSION_TERMINATION.value,
             handler_elapsed_ms=(outcome.elapsed_ms if outcome else None),
             error_class=(outcome.error_class if outcome else None),
             error_detail=(

@@ -89,7 +89,7 @@ Authorization: Bearer <your-token>      # only if auth_mode=bearer
               ["session_id",   "string",  "Same for every leg in one USSD dialog. Your state cache key."],
               ["service_code", "string",  "What was onboarded — a dialed code (Vodacom/Halotel) or a partner slug (Airtel/Tigo)."],
               ["ussd_string",  "string",  "User's full input trail joined by '*'. Example: '1*2*BalanceCode'."],
-              ["event",        "enum",    `"start" on the first leg of a new session; "input" on every leg after. One of "user_cancelled", "timeout", "charge_failed" or "session_expired" when the session has ended (section 3).`],
+              ["event",        "enum",    `"start" on the first leg of a new session; "input" on every leg after. One of "user_cancelled_session", "provider_session_termination" or "system_session_termination" when the session has ended (section 3).`],
               ["raw_payload",  "object (optional)",  "Original MNO-native payload (XML-as-dict for SOAP, query/form for the rest). NOT mandatory — present for forensics only; the normalised fields above are the contract."],
             ]}
           />
@@ -148,10 +148,9 @@ CON 1. Balance
           <FieldTable
             head={["event", "Sent by", "Meaning"]}
             rows={[
-              ["user_cancelled",  "Vodacom, Halotel", "The subscriber cancelled or hung up. Vodacom also reports its own 60-second idle cut-off this way."],
-              ["timeout",         "Vodacom, Halotel", "The network closed the session itself."],
-              ["charge_failed",   "Vodacom",          "A premium-rate charge for the session failed."],
-              ["session_expired", "Gateway (all networks)", "No leg arrived for the network's idle limit, so the gateway declared the session dead. The only end signal you will ever get on Airtel and Tigo, which never report cancels or timeouts."],
+              ["user_cancelled_session",       "Vodacom, Halotel", "The subscriber cancelled or hung up."],
+              ["provider_session_termination", "Vodacom, Halotel", "The network ended the session itself: it timed out, or (Vodacom) a premium-rate charge failed. Vodacom reports its own 60-second idle cut-off with the same code as a cancel; the gateway labels it this event when the session had been idle 55 seconds or more."],
+              ["system_session_termination",   "Gateway (all networks)", "No leg arrived for the network's idle limit, so the gateway declared the session dead. The only end signal you will ever get on Airtel and Tigo, which never report cancels or timeouts."],
             ]}
           />
           <ul className="list-disc pl-5 text-sm space-y-2">
@@ -170,7 +169,7 @@ CON 1. Balance
               session ended, so you can see where the subscriber stopped.
             </li>
             <li>
-              <code>session_expired</code> has no network request behind it.
+              <code>system_session_termination</code> has no network request behind it.
               Its <code>raw_payload</code> is{" "}
               <code>{`{"_source": "gateway_session_expiry", "idle_secs": …, "last_seen_at": …}`}</code>.
             </li>
@@ -191,7 +190,7 @@ CON 1. Balance
   "session_id":   "ABC123",
   "service_code": "glptigo",
   "ussd_string":  "1*2",
-  "event":        "session_expired",
+  "event":        "system_session_termination",
   "raw_payload":  {
     "_source":      "gateway_session_expiry",
     "idle_secs":    130,
@@ -223,10 +222,9 @@ CON 1. Balance
           <FieldTable
             head={["UssdString", "Equivalent event", "Meaning"]}
             rows={[
-              ["__USER_CANCELLED__",  "user_cancelled",  "Subscriber cancelled or hung up."],
-              ["__TIMEOUT__",         "timeout",         "Network closed the session."],
-              ["__CHARGE_FAILED__",   "charge_failed",   "Premium-rate charge failed."],
-              ["__SESSION_EXPIRED__", "session_expired", "Gateway idle limit reached."],
+              ["__USER_CANCELLED__",  "user_cancelled_session",       "Subscriber cancelled or hung up."],
+              ["__TIMEOUT__",         "provider_session_termination", "Network ended the session (timeout or failed charge)."],
+              ["__SESSION_EXPIRED__", "system_session_termination",   "Gateway idle limit reached."],
             ]}
           />
           <p className="text-sm">
