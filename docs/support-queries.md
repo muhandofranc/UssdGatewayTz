@@ -817,6 +817,37 @@ SELECT count(*) AS rows_in_default_partition
   FROM ussd_session_logs_default;
 ```
 
+### 6.5 How fast Halotel acknowledges our menus
+
+Halotel menus go out on a separate request to Halotel, and the
+gateway gives up waiting for Halotel's acknowledgement after
+`HALOTEL_OUTBOUND_TIMEOUT_SECS` (4s by default). `elapsed_ms` in the
+push result is how long that acknowledgement took. A rising `p95_ms`
+warns that Halotel is slowing down before `timeouts` start. A timed-out
+push is not always a lost menu: Halotel sometimes delivers the menu
+and acknowledges late.
+
+Rows logged before push timing was added have no `elapsed_ms` and are
+left out.
+
+```sql
+SELECT date_trunc('hour', ts) AT TIME ZONE 'Africa/Dar_es_Salaam'      AS hour_eat,
+       count(*)                                                        AS pushes,
+       percentile_cont(0.5)  WITHIN GROUP
+         (ORDER BY (raw_response_payload->>'elapsed_ms')::int)         AS p50_ms,
+       percentile_cont(0.95) WITHIN GROUP
+         (ORDER BY (raw_response_payload->>'elapsed_ms')::int)         AS p95_ms,
+       max((raw_response_payload->>'elapsed_ms')::int)                 AS max_ms,
+       count(*) FILTER (WHERE raw_response_payload->>'error' = 'timeout') AS timeouts
+  FROM ussd_session_logs
+ WHERE operator_name = 'halotel'
+   AND direction = 'async_outbound'
+   AND raw_response_payload ? 'elapsed_ms'
+   AND ts >= now() - interval '24 hours'                       -- ← change
+ GROUP BY 1
+ ORDER BY 1;
+```
+
 ---
 
 ## 7. Dashboard users and access
