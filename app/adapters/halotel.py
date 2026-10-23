@@ -95,6 +95,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import xml.etree.ElementTree as ET
 from typing import Optional
 
@@ -550,27 +551,37 @@ class Halotel:
         headers = {
             "Content-Type": "text/xml; charset=utf-8",
         }
+        # How long Halotel takes to ack the push, on every outcome --
+        # including timeouts, so a slowing USSDGW shows as a trend in
+        # raw_response_payload->>'elapsed_ms' before it hits the timeout.
+        started = time.monotonic()
         try:
             async with httpx.AsyncClient(timeout=cfg.outbound_timeout_secs) as client:
                 resp = await client.post(cfg.outbound_url, content=envelope, headers=headers)
         except httpx.TimeoutException as exc:
-            LOGGER.warning("halotel outbound timeout transactionid=%s: %s",
-                           ur.session_id, exc)
-            return {"error": "timeout", "detail": str(exc)[:300]}
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            LOGGER.warning("halotel outbound timeout transactionid=%s elapsed=%dms: %s",
+                           ur.session_id, elapsed_ms, exc)
+            return {"error": "timeout", "detail": str(exc)[:300],
+                    "elapsed_ms": elapsed_ms}
         except httpx.RequestError as exc:
-            LOGGER.warning("halotel outbound transport error transactionid=%s: %s",
-                           ur.session_id, exc)
-            return {"error": "transport", "detail": str(exc)[:300]}
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            LOGGER.warning("halotel outbound transport error transactionid=%s elapsed=%dms: %s",
+                           ur.session_id, elapsed_ms, exc)
+            return {"error": "transport", "detail": str(exc)[:300],
+                    "elapsed_ms": elapsed_ms}
+        elapsed_ms = int((time.monotonic() - started) * 1000)
 
         body_text = resp.text or ""
-        LOGGER.info("halotel OUTBOUND ACK status=%s transactionid=%s: %s",
-                    resp.status_code, ur.session_id, body_text)
+        LOGGER.info("halotel OUTBOUND ACK status=%s transactionid=%s elapsed=%dms: %s",
+                    resp.status_code, ur.session_id, elapsed_ms, body_text)
         error_code, parse_err = _parse_outbound_ack(body_text)
         out: dict = {
             "status":         resp.status_code,
             "error_code":     error_code,
             "body":           body_text[:500],
             "requestType":    out_type,
+            "elapsed_ms":     elapsed_ms,
         }
         if resp.status_code >= 400:
             out["error"] = "non2xx"
