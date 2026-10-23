@@ -628,7 +628,7 @@ SELECT o.name AS operator, coalesce(s.code, 'unmatched') AS shortcode,
  LIMIT 20;
 ```
 
-### 5.6 Very short sessions (5 seconds or less) last month
+### 5.6 Very short sessions (5 seconds or less) in a month
 
 Sessions that lasted 5 seconds or less from first to last message. A
 session with one message has a duration of 0. Many of these are
@@ -636,8 +636,10 @@ normal: a subscriber who dials, reads the menu and walks away is a
 one-message session. A shortcode or network whose share suddenly jumps
 usually means its first menu is failing or ending straight away.
 
-"Last month" is the previous calendar month in Tanzania time. For the
-last 30 days instead, replace both time conditions with
+Set the month in the two time conditions of each query: the first
+day of the month and the first day of the next month, in Tanzania
+time. The examples cover September 2026. For the last 30 days
+instead, replace both time conditions with
 `ts >= now() - interval '30 days'`.
 
 These read a whole month of traffic. Run the summary first, then list
@@ -645,32 +647,58 @@ sessions for the shortcode that stands out, using its filter.
 
 **Summary per network and shortcode:**
 
+Subscribers sometimes type more after the code, such as
+`*147*03#0755953306#`, and the network sends the whole string as the
+service code. The summary counts these under the code they started
+with (`*147*03#`) and shows how many there were in `extra_digits`.
+When a code's short sessions are mostly `extra_digits`, the dial
+string is the cause, not the application.
+
 ```sql
 WITH sessions AS (
   SELECT session_id, operator_name,
-         max(service_code) FILTER (WHERE service_code <> '') AS shortcode,
+         max(service_code) FILTER (WHERE service_code <> '') AS dialled,
          count(*)                                             AS legs,
          extract(epoch FROM max(ts) - min(ts))                AS duration_s
     FROM ussd_session_logs
-   WHERE ts >= (date_trunc('month', now() AT TIME ZONE 'Africa/Dar_es_Salaam') - interval '1 month')
-               AT TIME ZONE 'Africa/Dar_es_Salaam'
-     AND ts <   date_trunc('month', now() AT TIME ZONE 'Africa/Dar_es_Salaam')
-               AT TIME ZONE 'Africa/Dar_es_Salaam'
+   WHERE ts >= timestamp '2026-09-01 00:00' AT TIME ZONE 'Africa/Dar_es_Salaam'  -- ← change (month start, EAT)
+     AND ts <  timestamp '2026-10-01 00:00' AT TIME ZONE 'Africa/Dar_es_Salaam'  -- ← change (next month, EAT)
      -- The gateway's idle-expiry row is not subscriber activity.
      AND raw_request_payload->>'_source' IS DISTINCT FROM 'gateway_session_expiry'
    GROUP BY session_id, operator_name
+),
+coded AS (
+  -- Everything up to the first '#' is the code dialled; the rest is extra.
+  SELECT *, substring(dialled FROM '^[^#]*#') AS shortcode
+    FROM sessions
 )
 SELECT operator_name                                      AS network,
        coalesce(shortcode, '(unknown)')                   AS shortcode,
        count(*)                                           AS sessions,
        count(*) FILTER (WHERE duration_s <= 5)            AS short_sessions,
        count(*) FILTER (WHERE duration_s <= 5 AND legs = 1) AS one_message_only,
+       count(*) FILTER (WHERE duration_s <= 5
+                          AND dialled <> shortcode)       AS extra_digits,
        round(100.0 * count(*) FILTER (WHERE duration_s <= 5)
              / count(*), 1)                               AS short_pct
-  FROM sessions
+  FROM coded
  GROUP BY 1, 2
 HAVING count(*) FILTER (WHERE duration_s <= 5) > 0
  ORDER BY short_sessions DESC;
+```
+
+To see what was typed after the code, list the `extra_digits`
+sessions:
+
+```sql
+SELECT operator_name AS network, service_code AS dialled,
+       count(DISTINCT session_id) AS sessions
+  FROM ussd_session_logs
+ WHERE ts >= timestamp '2026-09-01 00:00' AT TIME ZONE 'Africa/Dar_es_Salaam'  -- ← change (month start, EAT)
+   AND ts <  timestamp '2026-10-01 00:00' AT TIME ZONE 'Africa/Dar_es_Salaam'  -- ← change (next month, EAT)
+   AND service_code ~ '#.'
+ GROUP BY 1, 2
+ ORDER BY 3 DESC;
 ```
 
 **The sessions themselves**, with what the subscriber last saw:
@@ -681,10 +709,8 @@ WITH legs AS (
          coalesce(error_class, handler_response_action, handler_response_text) AS status,
          left(handler_response_text, 60)                                    AS reply
     FROM ussd_session_logs
-   WHERE ts >= (date_trunc('month', now() AT TIME ZONE 'Africa/Dar_es_Salaam') - interval '1 month')
-               AT TIME ZONE 'Africa/Dar_es_Salaam'
-     AND ts <   date_trunc('month', now() AT TIME ZONE 'Africa/Dar_es_Salaam')
-               AT TIME ZONE 'Africa/Dar_es_Salaam'
+   WHERE ts >= timestamp '2026-09-01 00:00' AT TIME ZONE 'Africa/Dar_es_Salaam'  -- ← change (month start, EAT)
+     AND ts <  timestamp '2026-10-01 00:00' AT TIME ZONE 'Africa/Dar_es_Salaam'  -- ← change (next month, EAT)
      AND raw_request_payload->>'_source' IS DISTINCT FROM 'gateway_session_expiry'
      -- Strongly recommended: narrow to one shortcode and/or network.
      AND shortcode_id IN (SELECT id FROM shortcodes WHERE code = '*147*03#')   -- ← change, or delete the line
