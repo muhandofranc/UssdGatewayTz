@@ -55,7 +55,8 @@ export default async function AccountPage({ searchParams }: Props) {
               className="space-y-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6">
           <h2 className="text-lg font-medium">Change password</h2>
           <p className="text-xs text-slate-500">
-            At least 8 characters. You stay signed in on this device.
+            At least 8 characters. You stay signed in here; every other device
+            is signed out.
           </p>
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium">Current password</span>

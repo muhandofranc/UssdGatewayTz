@@ -166,6 +166,15 @@ services:
       SESSION_COOKIE_NAME:      ${SESSION_COOKIE_NAME:-ussd_dash}
       SESSION_TTL_SECONDS:      ${SESSION_TTL_SECONDS:-28800}
       SESSION_COOKIE_INSECURE:  ${SESSION_COOKIE_INSECURE:-0}
+      # Password reset by email (/forgot-password). Off unless SMTP_HOST,
+      # SMTP_FROM and DASHBOARD_PUBLIC_URL are all set. Links point at
+      # DASHBOARD_PUBLIC_URL — never derived from the request's Host.
+      DASHBOARD_PUBLIC_URL: ${DASHBOARD_PUBLIC_URL:-}
+      SMTP_HOST:     ${DASHBOARD_SMTP_HOST:-}
+      SMTP_PORT:     ${DASHBOARD_SMTP_PORT:-465}
+      SMTP_USER:     ${DASHBOARD_SMTP_USER:-}
+      SMTP_PASSWORD: ${DASHBOARD_SMTP_PASSWORD:-}
+      SMTP_FROM:     ${DASHBOARD_SMTP_FROM:-}
       NODE_ENV: production
       PORT:     "3000"
     volumes:

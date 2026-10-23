@@ -213,12 +213,36 @@ async function isSuperAdminRole(c: PoolClient, roleId: number): Promise<boolean>
   return r.rows[0]?.key === "super_admin";
 }
 
+/**
+ * Admin reset. Bumping password_version (db/034) signs the user out of
+ * every session they have open — the point of resetting a password.
+ */
 export async function resetPassword(id: number, newPassword: string): Promise<void> {
   const hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
   await query(
-    `UPDATE portal_users SET password_hash = $2, updated_at = now() WHERE id = $1`,
+    `UPDATE portal_users
+        SET password_hash = $2, password_version = password_version + 1, updated_at = now()
+      WHERE id = $1`,
     [id, hash],
   );
+}
+
+// bcrypt ignores everything past 72 bytes, so a longer password would
+// silently be accepted with any suffix.
+export const MAX_PASSWORD_BYTES = 72;
+
+/**
+ * The rules for a password a user picks themselves (/account and reset
+ * links). Returns the message to show, or null when it's acceptable.
+ * Callers must NOT trim: login compares the raw string.
+ */
+export function newPasswordError(pw: string, confirm: string): string | null {
+  if (pw.length < 8) return "new password must be ≥8 chars";
+  if (new TextEncoder().encode(pw).length > MAX_PASSWORD_BYTES) {
+    return `new password must be at most ${MAX_PASSWORD_BYTES} bytes`;
+  }
+  if (pw !== confirm) return "new passwords do not match";
+  return null;
 }
 
 /**
@@ -244,8 +268,12 @@ export async function changeOwnPassword(
     );
     const row = r.rows[0];
     if (!row || !(await bcrypt.compare(currentPassword, row.password_hash))) return false;
+    // Version bump signs out every other session (db/034); the caller
+    // re-issues this device's cookie so the user stays signed in here.
     await c.query(
-      `UPDATE portal_users SET password_hash = $2, updated_at = now() WHERE id = $1`,
+      `UPDATE portal_users
+          SET password_hash = $2, password_version = password_version + 1, updated_at = now()
+        WHERE id = $1`,
       [id, hash],
     );
     return true;

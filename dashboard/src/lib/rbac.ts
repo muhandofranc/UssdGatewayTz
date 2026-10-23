@@ -58,6 +58,12 @@ export function requiredPermFor(pathname: string): PermKey[] | null {
   if (pathname === "/login") return null;
   if (pathname === "/api/auth/login") return null;
   if (pathname === "/api/auth/logout") return null; // logout is its own self-check
+  // Password reset by email (lib/passwordReset.ts) — the user is signed
+  // out by definition. The two API routes do their own same-origin and
+  // rate-limit checks.
+  if (pathname === "/forgot-password" || pathname === "/reset-password") return null;
+  if (pathname === "/api/auth/forgot-password") return null;
+  if (pathname === "/api/auth/reset-password") return null;
   // The way OUT of an impersonated session must never be gated on the
   // impersonated user's perms — that could strand an admin inside a
   // session with no route back. The handler itself requires a session

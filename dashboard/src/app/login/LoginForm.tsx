@@ -11,12 +11,14 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 export default function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const nextHref = params.get("next") || "/";
+  const justReset = params.get("reset") === "1";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +78,12 @@ export default function LoginForm() {
           />
         </div>
 
+        {justReset && !error ? (
+          <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
+            Password changed. Sign in with your new password.
+          </div>
+        ) : null}
+
         {error ? (
           <div className="rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 px-3 py-2 text-sm text-red-700 dark:text-red-300">
             {error}
@@ -93,6 +101,10 @@ export default function LoginForm() {
             </>
           ) : "Sign in"}
         </button>
+
+        <Link href="/forgot-password" className="block text-center text-xs text-slate-500 underline">
+          Forgot password?
+        </Link>
       </div>
     </form>
   );

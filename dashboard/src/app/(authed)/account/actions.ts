@@ -11,8 +11,8 @@
  */
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { getSession } from "@/lib/auth";
-import { changeOwnPassword } from "@/lib/users";
+import { getSession, loadUserClaims, setSessionCookie, signSession } from "@/lib/auth";
+import { changeOwnPassword, newPasswordError } from "@/lib/users";
 import { audit, clientIp, recentAuditCount } from "@/lib/audit";
 
 const ACTION = "auth.change_password";
@@ -22,9 +22,6 @@ const ACTION = "auth.change_password";
 // systems too).
 const MAX_FAILURES = 5;
 const WINDOW_MINUTES = 15;
-// bcrypt ignores everything past 72 bytes, so a longer password would
-// silently be accepted with any suffix.
-const MAX_PASSWORD_BYTES = 72;
 
 function back(error: string): never {
   redirect(`/account?error=${encodeURIComponent(error)}`);
@@ -43,11 +40,8 @@ export async function actionChangeOwnPassword(fd: FormData) {
   const confirm = fd.get("password_confirm")?.toString() ?? "";
 
   if (!current) back("enter your current password");
-  if (pw.length < 8) back("new password must be ≥8 chars");
-  if (new TextEncoder().encode(pw).length > MAX_PASSWORD_BYTES) {
-    back(`new password must be at most ${MAX_PASSWORD_BYTES} bytes`);
-  }
-  if (pw !== confirm) back("new passwords do not match");
+  const invalid = newPasswordError(pw, confirm);
+  if (invalid) back(invalid);
   if (pw === current) back("new password must differ from the current one");
 
   const failures = await recentAuditCount(session.email, ACTION, "failure", WINDOW_MINUTES);
@@ -67,5 +61,11 @@ export async function actionChangeOwnPassword(fd: FormData) {
     detail: ok ? null : { reason: "bad_current_password" },
   });
   if (!ok) back("current password is incorrect");
+  // The change bumped password_version, which revokes every session —
+  // this one included. Re-mint it so the user stays signed in on the
+  // device they changed it from; everywhere else is signed out.
+  const claims = await loadUserClaims(Number(session.sub));
+  if (!claims) redirect("/login");
+  await setSessionCookie(await signSession(claims));
   redirect("/account?changed=1");
 }

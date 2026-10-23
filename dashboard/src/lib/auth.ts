@@ -13,12 +13,15 @@
  * case. Use `sessionAcl()` to get the pair in the shape lib/acl.ts
  * consumes; that module is the only place that turns it into SQL.
  *
- * Rotation: bumping SESSION_SECRET invalidates every live session
- * (jose will reject the HMAC). This is the only revocation primitive;
- * intentional, mirrors jubileeTzUssd.
+ * Revocation: each session carries the user's password_version
+ * (`pwv`, db/034) and getSession() rejects it once that version moves
+ * on or the user is deactivated — so a password change, admin reset or
+ * reset link signs out every other device. Bumping SESSION_SECRET still
+ * invalidates every live session at once (jose rejects the HMAC).
  */
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import { query } from "./db";
 import type { ShortcodeAcl } from "./acl";
 
@@ -84,6 +87,12 @@ export interface NewSessionClaims {
    */
   shortcodeFrom?: Record<string, number>;
   /**
+   * portal_users.password_version when this session was minted (db/034).
+   * Optional: sessions minted before it existed have none and count as
+   * version 0, so the deploy that introduced it logged nobody out.
+   */
+  pwv?: number;
+  /**
    * Present only while impersonating: WHO IS REALLY DRIVING. Every
    * other claim above describes the impersonated user, so this is the
    * identity that matters for accountability — the banner names it and
@@ -111,6 +120,8 @@ export interface ImpersonationOrigin {
   email: string;
   name: string;
   role: string;
+  /** The ACTOR's password_version: their password changing ends this too. */
+  pwv?: number;
 }
 
 /**
@@ -164,7 +175,7 @@ export function impersonatedClaims(
     perms: target.perms.filter((p) => actorPerms.has(p)),
     imp: {
       sub: actor.sub, email: actor.email,
-      name: actor.name, role: actor.role,
+      name: actor.name, role: actor.role, pwv: actor.pwv,
     },
   };
 }
@@ -214,8 +225,40 @@ export async function verifySession(jwt: string): Promise<SessionClaims | null> 
 export async function getSession(): Promise<SessionClaims | null> {
   const jwt = (await cookies()).get(COOKIE_NAME)?.value;
   if (!jwt) return null;
-  return await verifySession(jwt);
+  const claims = await verifySession(jwt);
+  if (!claims) return null;
+  if (!(await userStillValid(claims.sub, claims.pwv ?? 0))) return null;
+  // While impersonating, the real actor must still be valid too: an
+  // admin deactivated or reset mid-impersonation is signed out of it.
+  if (claims.imp && !(await userStillValid(claims.imp.sub, claims.imp.pwv ?? 0))) {
+    return null;
+  }
+  return claims;
 }
+
+/**
+ * Is this user still active, with the password version the session was
+ * minted under? The DB half of revocation (see the header). One primary-
+ * key read; React's cache() collapses the several getSession() calls a
+ * single page render makes (layout, page, components) into one.
+ *
+ * Errors propagate rather than returning false: a DB outage should show
+ * as an error page, not silently bounce everyone to /login.
+ *
+ * The edge middleware can't do this check (no DB at the edge), so it
+ * still passes a revoked-but-unexpired JWT through — every page and API
+ * route then calls getSession(), which is where it is refused.
+ */
+const userStillValid = cache(async (sub: string, pwv: number): Promise<boolean> => {
+  const id = Number(sub);
+  if (!Number.isInteger(id)) return false;
+  const r = await query<{ password_version: number }>(
+    `SELECT password_version FROM portal_users WHERE id = $1 AND active = TRUE`,
+    [id],
+  );
+  const row = r.rows[0];
+  return !!row && row.password_version === pwv;
+});
 
 export async function setSessionCookie(
   jwt: string, ttlSeconds?: number,
@@ -258,16 +301,16 @@ export async function loadUserClaims(
 ): Promise<NewSessionClaims | null> {
   const r = await query<{
     id: number; email: string; name: string;
-    role_key: string; perms: string[];
+    role_key: string; perms: string[]; password_version: number;
   }>(
-    `SELECT u.id, u.email, u.name, r.key AS role_key,
+    `SELECT u.id, u.email, u.name, r.key AS role_key, u.password_version,
             COALESCE(ARRAY_AGG(p.key) FILTER (WHERE p.key IS NOT NULL), '{}') AS perms
        FROM portal_users u
        JOIN roles r ON r.id = u.role_id
   LEFT JOIN role_permissions rp ON rp.role_id = r.id
   LEFT JOIN permissions p ON p.id = rp.permission_id
       WHERE u.id = $1 AND u.active = TRUE
-      GROUP BY u.id, u.email, u.name, r.key`,
+      GROUP BY u.id, u.email, u.name, r.key, u.password_version`,
     [userId],
   );
   const row = r.rows[0];
@@ -323,6 +366,7 @@ export async function loadUserClaims(
     perms: row.perms,
     shortcodeIds,
     shortcodeFrom,
+    pwv: row.password_version,
   };
 }
 

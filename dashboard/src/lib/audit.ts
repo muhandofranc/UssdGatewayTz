@@ -80,6 +80,29 @@ export async function recentAuditCount(
   }
 }
 
+/**
+ * Same as recentAuditCount, keyed by client IP across every outcome —
+ * for public endpoints where the actor is whatever email a stranger
+ * typed. A null IP (no proxy headers) counts as 0: fails open, as above.
+ */
+export async function recentAuditCountByIp(
+  ip: string | null, action: string, minutes: number,
+): Promise<number> {
+  if (!ip) return 0;
+  try {
+    const r = await query<{ n: string }>(
+      `SELECT COUNT(*) AS n FROM portal_audit_log
+        WHERE ip = $1 AND action = $2
+          AND ts > now() - make_interval(mins => $3)`,
+      [ip, action, minutes],
+    );
+    return Number(r.rows[0]?.n ?? 0);
+  } catch (e) {
+    console.error("audit count failed:", e);
+    return 0;
+  }
+}
+
 // =====================================================================
 // Read side — for the super_admin /audit page (db/011 audit.view perm)
 // =====================================================================

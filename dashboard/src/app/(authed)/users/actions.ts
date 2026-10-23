@@ -11,7 +11,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { getSession, hasPerm } from "@/lib/auth";
+import { getSession, hasPerm, loadUserClaims, setSessionCookie, signSession } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
 import {
   createUser, emailExists, resetPassword, updateUser, NoLockoutError,
@@ -161,6 +161,12 @@ export async function actionResetPassword(id: number, fd: FormData) {
     return redirect(`/users/${id}?error=${encodeURIComponent("passwords do not match")}`);
   }
   await resetPassword(id, pw);
+  // The reset signs the user out everywhere (db/034). When admins reset
+  // THEIR OWN password here, keep this session alive like /account does.
+  if (String(id) === session.sub) {
+    const claims = await loadUserClaims(id);
+    if (claims) await setSessionCookie(await signSession(claims));
+  }
   const meta = await reqMeta();
   await audit({
     actor: session.email, action: "user.reset_password",
