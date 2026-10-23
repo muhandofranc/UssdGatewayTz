@@ -135,6 +135,13 @@ export function requiredPermFor(pathname: string): PermKey[] | null {
   if (pathname.startsWith("/archive") || pathname.startsWith("/api/archive")) {
     return [Perms.ARCHIVE_VIEW];
   }
+  // Own account (change password) — every role. client_viewer holds
+  // only reports.view_own and auditor only reports.view_all, so the
+  // pair covers them all. Explicit rather than left to the fallback
+  // below so a future change there can't lock anyone out of it.
+  if (pathname === "/account" || pathname.startsWith("/account/")) {
+    return [Perms.REPORTS_VIEW_OWN, Perms.REPORTS_VIEW_ALL];
+  }
   // Anything else under (authed)/ → require at minimum a session
   // (any perm). Returning empty array means "must be logged in but
   // any perm passes". We use REPORTS_VIEW_OWN as the lowest-common

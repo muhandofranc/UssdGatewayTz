@@ -142,7 +142,10 @@ export default async function AuthedLayout({
                 : null}
             </nav>
             <div className="ml-auto flex items-center gap-3 text-sm">
-              <div className="flex items-center gap-2">
+              {/* The user chip doubles as the way into /account (change
+                  password) — every role can reach it. */}
+              <Link href="/account" title="My account — change password"
+                    className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-slate-800 transition-colors">
                 <div className="flex h-7 w-7 items-center justify-center rounded-full bg-onfon-red/25 text-[11px] font-semibold text-white ring-1 ring-white/15">
                   {initials}
                 </div>
@@ -150,7 +153,7 @@ export default async function AuthedLayout({
                   <span className="text-slate-100">{session.name}</span>
                   <span className="font-mono text-[10px] uppercase tracking-wider text-slate-400">{session.role}</span>
                 </div>
-              </div>
+              </Link>
               <ThemeToggle />
               <form action="/api/auth/logout" method="post">
                 <button

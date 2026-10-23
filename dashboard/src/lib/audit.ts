@@ -54,6 +54,32 @@ export function clientIp(req: Request | Headers): string | null {
   return h.get("x-real-ip") || null;
 }
 
+/**
+ * How many times `actor` hit `action` with `outcome` in the last
+ * `minutes`. Backs attempt throttles without a separate counter table:
+ * the audit log already records every attempt, and is indexed on
+ * (ts, actor, action, outcome).
+ *
+ * Fails OPEN (returns 0) if the read errors, matching audit()'s rule
+ * that auditing never breaks the user-facing flow.
+ */
+export async function recentAuditCount(
+  actor: string, action: string, outcome: AuditOutcome, minutes: number,
+): Promise<number> {
+  try {
+    const r = await query<{ n: string }>(
+      `SELECT COUNT(*) AS n FROM portal_audit_log
+        WHERE actor = $1 AND action = $2 AND outcome = $3
+          AND ts > now() - make_interval(mins => $4)`,
+      [actor, action, outcome, minutes],
+    );
+    return Number(r.rows[0]?.n ?? 0);
+  } catch (e) {
+    console.error("audit count failed:", e);
+    return 0;
+  }
+}
+
 // =====================================================================
 // Read side — for the super_admin /audit page (db/011 audit.view perm)
 // =====================================================================

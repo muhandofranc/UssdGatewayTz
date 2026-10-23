@@ -221,6 +221,37 @@ export async function resetPassword(id: number, newPassword: string): Promise<vo
   );
 }
 
+/**
+ * Self-service password change: the caller must prove the CURRENT
+ * password. Returns false (and changes nothing) when it doesn't match
+ * or the account is no longer active.
+ *
+ * Row-locked so two concurrent changes can't both verify against the
+ * old hash and race each other's writes.
+ */
+export async function changeOwnPassword(
+  id: number, currentPassword: string, newPassword: string,
+): Promise<boolean> {
+  // Hash outside the transaction: bcrypt at 12 rounds is ~250ms and
+  // shouldn't hold the row lock.
+  const hash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
+  return withTx(async (c) => {
+    const r = await c.query<{ password_hash: string }>(
+      `SELECT password_hash FROM portal_users
+        WHERE id = $1 AND active = TRUE
+        FOR UPDATE`,
+      [id],
+    );
+    const row = r.rows[0];
+    if (!row || !(await bcrypt.compare(currentPassword, row.password_hash))) return false;
+    await c.query(
+      `UPDATE portal_users SET password_hash = $2, updated_at = now() WHERE id = $1`,
+      [id, hash],
+    );
+    return true;
+  });
+}
+
 export async function emailExists(email: string, excludeId?: number): Promise<boolean> {
   const r = await query<{ id: number }>(
     excludeId
