@@ -91,6 +91,11 @@ export default async function UserNew({ error, variant }: NewProps) {
           </label>
         </div>
 
+        <label className="inline-flex items-center gap-2 text-sm">
+          <input type="checkbox" name="send_email" value="1" defaultChecked />
+          <span>Email the login details (including the password) to the user</span>
+        </label>
+
         <div className="flex items-center gap-2 pt-2">
           <button type="submit"
                   className="rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 px-3 py-1.5 text-sm font-medium">

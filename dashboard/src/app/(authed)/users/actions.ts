@@ -20,6 +20,7 @@ import {
   type UserCreate, type UserUpdate, type AdminViewerCreate,
 } from "@/lib/users";
 import { audit, clientIp } from "@/lib/audit";
+import { sendWelcomeEmail, type WelcomeEmailResult } from "@/lib/welcomeEmail";
 
 async function requireAdmin() {
   const session = await getSession();
@@ -63,6 +64,29 @@ function i(fd: FormData, k: string): number {
 function b(fd: FormData, k: string): boolean {
   const v = s(fd, k);
   return v === "1" || v === "true" || v === "on";
+}
+
+/**
+ * Email a just-created user their login details (if the form's
+ * "send_email" box was ticked) and audit the outcome — never the
+ * password. Returns the result for the ?email= notice on /users.
+ */
+async function emailNewUser(
+  actorEmail: string, meta: { ip: string | null; ua: string | null },
+  user: { id: number; email: string; name: string; password: string }, fd: FormData,
+): Promise<WelcomeEmailResult> {
+  const { result, error } = await sendWelcomeEmail(
+    { to: user.email, name: user.name, password: user.password, createdBy: actorEmail },
+    b(fd, "send_email"),
+  );
+  if (result === "sent" || result === "failed") {
+    await audit({
+      actor: actorEmail, action: "user.welcome_email", target: user.email,
+      outcome: result === "sent" ? "success" : "failure", ip: meta.ip, userAgent: meta.ua,
+      detail: error ? { id: user.id, error } : { id: user.id },
+    });
+  }
+  return result;
 }
 
 function parseCreate(fd: FormData): { c?: UserCreate; error?: string } {
@@ -112,8 +136,9 @@ export async function actionCreateUser(fd: FormData) {
     outcome: "success", ip: meta.ip, userAgent: meta.ua,
     detail: { id, role_id: c.role_id },
   });
+  const emailed = await emailNewUser(session.email, meta, { id, ...c }, fd);
   revalidatePath("/users");
-  redirect("/users");
+  redirect(`/users?created=1&email=${emailed}`);
 }
 
 export async function actionUpdateUser(id: number, fd: FormData) {
@@ -234,8 +259,9 @@ export async function actionAdminCreateViewer(fd: FormData) {
       outcome: "success", ip: meta.ip, userAgent: meta.ua,
       detail: { id, shortcode_ids: c.shortcode_ids },
     });
+    const emailed = await emailNewUser(session.email, meta, { id, ...c }, fd);
     revalidatePath("/users");
-    redirect("/users?created=1");
+    redirect(`/users?created=1&email=${emailed}`);
   } catch (e) {
     if (e instanceof ScopeError) {
       await audit({

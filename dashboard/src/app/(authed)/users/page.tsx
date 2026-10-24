@@ -24,12 +24,13 @@ import {
   type UserListFilters,
 } from "@/lib/users";
 import { listShortcodesOwnedBy } from "@/lib/shortcodes";
+import { welcomeEmailNotice, WELCOME_EMAIL_FAILED } from "@/lib/welcomeEmail";
 import {
   actionAdminCreateViewer, actionAdminSetGrants, actionAdminUpdateViewer,
 } from "./actions";
 
 type SearchParams = {
-  error?: string; saved?: string; created?: string; reset?: string;
+  error?: string; saved?: string; created?: string; reset?: string; email?: string;
   /** Filter querystring (FullList branch only): role_id, active, q. */
   role_id?: string;
   active?: string;        // "1" / "0" / "" (any)
@@ -43,10 +44,12 @@ export default async function UsersPage({
   if (!session) redirect("/login");
 
   const sp = await searchParams;
-  const flash = sp.created ? "Viewer created."
+  const flash = sp.created ? "Account created." + welcomeEmailNotice(sp.email)
               : sp.saved   ? "Saved."
               : sp.reset   ? "Password reset."
               : null;
+  const error = sp.error
+             ?? (sp.created && sp.email === "failed" ? WELCOME_EMAIL_FAILED : null);
 
   const canManageAll = hasPerm(session, Perms.PORTAL_USERS_MANAGE);
   const canViewAll   = hasPerm(session, Perms.PORTAL_USERS_VIEW);
@@ -71,7 +74,7 @@ export default async function UsersPage({
         canImpersonate={canImpersonate}
         selfId={Number(session.sub)}
         flash={flash}
-        error={sp.error ?? null}
+        error={error}
         filters={filters}
       />
     );
@@ -83,7 +86,7 @@ export default async function UsersPage({
       <AdminViewerView
         adminUserId={Number(session.sub)}
         flash={flash}
-        error={sp.error ?? null}
+        error={error}
       />
     );
   }
@@ -286,6 +289,7 @@ async function AdminViewerView({
             <Field label="Phone (optional)" name="phone" />
             <Field label="Password (≥8 chars)" name="password" type="password" required />
             <Field label="Confirm password" name="password_confirm" type="password" required />
+            <SendEmailBox />
             <div className="md:col-span-2">
               <label className="block text-xs font-medium mb-1">
                 Grant access to (Ctrl/Cmd-click to select multiple)
@@ -403,6 +407,16 @@ function ViewerCard({
 // --------------------------------------------------------------------
 // Tiny helpers
 // --------------------------------------------------------------------
+
+/** Ticked by default: the new user gets their login details by email. */
+function SendEmailBox() {
+  return (
+    <label className="md:col-span-2 inline-flex items-center gap-2 text-sm">
+      <input type="checkbox" name="send_email" value="1" defaultChecked />
+      <span>Email the login details (including the password) to the user</span>
+    </label>
+  );
+}
 
 function Field({
   label, name, type = "text", required = false, defaultValue,
