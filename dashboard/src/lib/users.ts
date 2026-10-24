@@ -133,13 +133,43 @@ export interface UserUpdate {
 
 const BCRYPT_ROUNDS = 12;
 
-export async function createUser(c: UserCreate): Promise<number> {
+/**
+ * Email already belongs to another user. emailExists() catches the
+ * common case before writing; this is the database's answer (db/035's
+ * unique index on LOWER(email)) when two requests race past that check.
+ */
+export class EmailTakenError extends Error {
+  constructor() { super("email already in use"); this.name = "EmailTakenError"; }
+}
+
+function rethrowEmailTaken(e: unknown): never {
+  const pg = e as { code?: string; constraint?: string };
+  if (pg?.code === "23505"
+      && (pg.constraint === "uq_portal_users_email_lower"
+          || pg.constraint === "portal_users_email_key")) {
+    throw new EmailTakenError();
+  }
+  throw e;
+}
+
+/**
+ * Who may change a user's email: a super admin, or the user who
+ * created the account (db/035 created_by_user_id). Nobody changes their
+ * own email unless they are a super admin.
+ */
+export function canChangeEmail(
+  actor: { id: number; isSuperAdmin: boolean }, target: { created_by_user_id: number | null },
+): boolean {
+  return actor.isSuperAdmin || target.created_by_user_id === actor.id;
+}
+
+export async function createUser(c: UserCreate, creatorId: number): Promise<number> {
   const hash = await bcrypt.hash(c.password, BCRYPT_ROUNDS);
   const r = await query<{ id: number }>(
-    `INSERT INTO portal_users (email, name, phone, role_id, password_hash)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [c.email, c.name, c.phone, c.role_id, hash],
-  );
+    `INSERT INTO portal_users (email, name, phone, role_id, password_hash, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [c.email, c.name, c.phone, c.role_id, hash, creatorId],
+  ).catch(rethrowEmailTaken);
   return r.rows[0]!.id;
 }
 
@@ -153,14 +183,15 @@ export class NoLockoutError extends Error {
   constructor(public reason: string) { super(reason); this.name = "NoLockoutError"; }
 }
 
+/** Returns the user's email BEFORE the update, for the audit trail. */
 export async function updateUser(
   id: number, u: UserUpdate, actingUserId: number,
-): Promise<void> {
-  await withTx(async (c) => {
+): Promise<string> {
+  return withTx(async (c) => {
     // Snapshot the current row + super_admin role id for the
     // invariant check.
-    const curR = await c.query<{ role_id: number; active: boolean; role_key: string }>(
-      `SELECT u.role_id, u.active, r.key AS role_key
+    const curR = await c.query<{ role_id: number; active: boolean; role_key: string; email: string }>(
+      `SELECT u.role_id, u.active, r.key AS role_key, u.email
          FROM portal_users u JOIN roles r ON r.id = u.role_id
         WHERE u.id = $1 FOR UPDATE`,
       [id],
@@ -196,13 +227,19 @@ export async function updateUser(
       }
     }
 
+    // A changed email is a changed login identity, so it signs the user
+    // out everywhere (password_version, db/034) — their sessions carry
+    // the old address. `email` on the right-hand side is the old value.
     await c.query(
       `UPDATE portal_users
-          SET email = $2, name = $3, phone = $4,
-              role_id = $5, active = $6, updated_at = now()
+          SET email = $2::text, name = $3, phone = $4,
+              role_id = $5, active = $6, updated_at = now(),
+              password_version = password_version
+                + CASE WHEN LOWER(email) <> LOWER($2::text) THEN 1 ELSE 0 END
         WHERE id = $1`,
       [id, u.email, u.name, u.phone, u.role_id, u.active],
-    );
+    ).catch(rethrowEmailTaken);
+    return cur.email;
   });
 }
 
@@ -316,6 +353,8 @@ export interface AdminViewerRow {
   active: boolean;
   created_at: string;
   last_login: string | null;
+  /** Who created the account (db/035); decides who may change its email. */
+  created_by_user_id: number | null;
   /** Shortcode ids the Admin has granted to this viewer (a subset of
    *  the viewer's full grants — limited to the Admin's own shortcodes). */
   granted_shortcode_ids: number[];
@@ -334,7 +373,7 @@ export async function listViewersForAdmin(
           JOIN admin_shortcodes a ON a.id = pus.shortcode_id
      )
      SELECT u.id, u.email, u.name, u.phone, u.active,
-            u.created_at::text, u.last_login::text,
+            u.created_at::text, u.last_login::text, u.created_by_user_id,
             COALESCE(
               ARRAY_AGG(vg.shortcode_id ORDER BY vg.shortcode_id)
                 FILTER (WHERE vg.shortcode_id IS NOT NULL),
@@ -367,7 +406,7 @@ export async function getViewerForAdmin(
          WHERE pus.portal_user_id = $2
      )
      SELECT u.id, u.email, u.name, u.phone, u.active,
-            u.created_at::text, u.last_login::text,
+            u.created_at::text, u.last_login::text, u.created_by_user_id,
             COALESCE(ARRAY_AGG(vg.shortcode_id) FILTER (WHERE vg.shortcode_id IS NOT NULL),
                      ARRAY[]::int[]) AS granted_shortcode_ids
        FROM portal_users u
@@ -452,10 +491,10 @@ export async function createViewerAsAdmin(
     const roleId = roleR.rows[0]?.id;
     if (!roleId) throw new ScopeError("client_viewer role missing — run db/010 migration");
     const insR = await tx.query<{ id: number }>(
-      `INSERT INTO portal_users (email, name, phone, role_id, password_hash)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [c.email, c.name, c.phone, roleId, hash],
-    );
+      `INSERT INTO portal_users (email, name, phone, role_id, password_hash, created_by_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [c.email, c.name, c.phone, roleId, hash, adminUserId],
+    ).catch(rethrowEmailTaken);
     const newId = insR.rows[0]!.id;
     for (const scId of c.shortcode_ids) {
       await tx.query(
@@ -516,15 +555,17 @@ export async function setViewerGrantsAsAdmin(
 
 /** Admin update of a viewer's profile fields (email/name/phone/
  *  active). Role is fixed to client_viewer — Admin cannot promote a
- *  user out of their lane. */
+ *  user out of their lane. Returns the email BEFORE the update. */
 export async function updateViewerAsAdmin(
   viewerId: number,
   u: { email: string; name: string; phone: string | null; active: boolean },
   adminUserId: number,
-): Promise<void> {
-  await withTx(async (tx) => {
-    const r = await tx.query<{ role_key: string; has_grant: boolean }>(
-      `SELECT r.key AS role_key,
+): Promise<string> {
+  return withTx(async (tx) => {
+    const r = await tx.query<{
+      role_key: string; has_grant: boolean; email: string; created_by_user_id: number | null;
+    }>(
+      `SELECT r.key AS role_key, u.email, u.created_by_user_id,
               EXISTS (
                 SELECT 1 FROM portal_user_shortcodes pus
                   JOIN shortcodes s ON s.id = pus.shortcode_id
@@ -543,12 +584,24 @@ export async function updateViewerAsAdmin(
       // their lane. Pretend it doesn't exist (no information leak).
       throw new ScopeError("viewer not found");
     }
+    // Granting shortcodes lets an Admin edit a viewer's name, phone and
+    // active flag; the EMAIL is the login identity and only its creator
+    // (or a super admin, via updateUser) may change it.
+    const emailChanged = r.rows[0].email.toLowerCase() !== u.email.toLowerCase();
+    if (emailChanged && !canChangeEmail({ id: adminUserId, isSuperAdmin: false }, r.rows[0])) {
+      throw new ScopeError(
+        "only a super admin or the user who created this account can change its email",
+      );
+    }
+    // Email change signs the viewer out everywhere — see updateUser.
     await tx.query(
       `UPDATE portal_users
-          SET email = $2, name = $3, phone = $4, active = $5, updated_at = now()
+          SET email = $2, name = $3, phone = $4, active = $5, updated_at = now(),
+              password_version = password_version + $6
         WHERE id = $1`,
-      [viewerId, u.email, u.name, u.phone, u.active],
-    );
+      [viewerId, u.email, u.name, u.phone, u.active, emailChanged ? 1 : 0],
+    ).catch(rethrowEmailTaken);
+    return r.rows[0].email;
   });
 }
 

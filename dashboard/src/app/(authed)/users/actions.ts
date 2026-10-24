@@ -14,7 +14,7 @@ import { headers } from "next/headers";
 import { getSession, hasPerm, loadUserClaims, setSessionCookie, signSession } from "@/lib/auth";
 import { Perms } from "@/lib/rbac";
 import {
-  createUser, emailExists, resetPassword, updateUser, NoLockoutError,
+  createUser, emailExists, resetPassword, updateUser, NoLockoutError, EmailTakenError,
   createViewerAsAdmin, setViewerGrantsAsAdmin, updateViewerAsAdmin,
   getViewerForAdmin, ScopeError,
   type UserCreate, type UserUpdate, type AdminViewerCreate,
@@ -129,7 +129,15 @@ export async function actionCreateUser(fd: FormData) {
   if (await emailExists(c.email)) {
     return redirect(`/users/new?error=${encodeURIComponent("email already in use")}`);
   }
-  const id = await createUser(c);
+  let id: number;
+  try {
+    id = await createUser(c, Number(session.sub));
+  } catch (e) {
+    if (e instanceof EmailTakenError) {
+      return redirect(`/users/new?error=${encodeURIComponent(e.message)}`);
+    }
+    throw e;
+  }
   const meta = await reqMeta();
   await audit({
     actor: session.email, action: "user.create", target: c.email,
@@ -150,9 +158,13 @@ export async function actionUpdateUser(id: number, fd: FormData) {
   if (await emailExists(u.email, id)) {
     return redirect(`/users/${id}?error=${encodeURIComponent("email already in use")}`);
   }
+  let previousEmail: string;
   try {
-    await updateUser(id, u, Number(session.sub));
+    previousEmail = await updateUser(id, u, Number(session.sub));
   } catch (e) {
+    if (e instanceof EmailTakenError) {
+      return redirect(`/users/${id}?error=${encodeURIComponent(e.message)}`);
+    }
     if (e instanceof NoLockoutError) {
       const meta = await reqMeta();
       await audit({
@@ -168,8 +180,17 @@ export async function actionUpdateUser(id: number, fd: FormData) {
   await audit({
     actor: session.email, action: "user.update", target: u.email,
     outcome: "success", ip: meta.ip, userAgent: meta.ua,
-    detail: { id, role_id: u.role_id, active: u.active },
+    detail: {
+      id, role_id: u.role_id, active: u.active,
+      ...(previousEmail.toLowerCase() !== u.email ? { previous_email: previousEmail } : {}),
+    },
   });
+  // A changed email signs that user out everywhere (lib/users.ts). When
+  // super admins change their OWN, keep this session, as /account does.
+  if (String(id) === session.sub) {
+    const claims = await loadUserClaims(id);
+    if (claims) await setSessionCookie(await signSession(claims));
+  }
   revalidatePath("/users");
   revalidatePath(`/users/${id}`);
   redirect("/users");
@@ -253,7 +274,12 @@ export async function actionAdminCreateViewer(fd: FormData) {
   }
   const meta = await reqMeta();
   try {
-    const id = await createViewerAsAdmin(c, Number(session.sub));
+    const id = await createViewerAsAdmin(c, Number(session.sub)).catch((e) => {
+      if (e instanceof EmailTakenError) {
+        redirect(`/users?error=${encodeURIComponent(e.message)}`);
+      }
+      throw e;
+    });
     await audit({
       actor: session.email, action: "viewer.create", target: c.email,
       outcome: "success", ip: meta.ip, userAgent: meta.ua,
@@ -319,11 +345,21 @@ export async function actionAdminUpdateViewer(viewerId: number, fd: FormData) {
   }
   const meta = await reqMeta();
   try {
-    await updateViewerAsAdmin(viewerId, { email, name, phone, active }, Number(session.sub));
+    const previousEmail = await updateViewerAsAdmin(
+      viewerId, { email, name, phone, active }, Number(session.sub),
+    ).catch((e) => {
+      if (e instanceof EmailTakenError) {
+        redirect(`/users?error=${encodeURIComponent(e.message)}`);
+      }
+      throw e;
+    });
     await audit({
       actor: session.email, action: "viewer.update", target: email,
       outcome: "success", ip: meta.ip, userAgent: meta.ua,
-      detail: { id: viewerId, active },
+      detail: {
+        id: viewerId, active,
+        ...(previousEmail.toLowerCase() !== email ? { previous_email: previousEmail } : {}),
+      },
     });
     revalidatePath("/users");
     redirect("/users?saved=1");

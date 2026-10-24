@@ -323,7 +323,8 @@ async function AdminViewerView({
         ) : (
           <div className="space-y-3">
             {viewers.map((v) => (
-              <ViewerCard key={v.id} viewer={v} myShortcodes={myShortcodes} />
+              <ViewerCard key={v.id} viewer={v} myShortcodes={myShortcodes}
+                          canEditEmail={v.created_by_user_id === adminUserId} />
             ))}
           </div>
         )}
@@ -333,11 +334,14 @@ async function AdminViewerView({
 }
 
 function ViewerCard({
-  viewer, myShortcodes,
+  viewer, myShortcodes, canEditEmail,
 }: {
   viewer: { id: number; email: string; name: string; phone: string | null;
             active: boolean; last_login: string | null; granted_shortcode_ids: number[] };
   myShortcodes: { id: number; operator_name: string; code: string; label: string | null }[];
+  /** Only the account's creator (or a super admin) may change its email —
+   *  lib/users.ts canChangeEmail; the action re-checks. */
+  canEditEmail: boolean;
 }) {
   const grantedSet = new Set(viewer.granted_shortcode_ids);
   return (
@@ -360,7 +364,18 @@ function ViewerCard({
       {/* Profile + active state */}
       <form action={actionAdminUpdateViewer.bind(null, viewer.id)}
             className="grid gap-3 md:grid-cols-2 border-t border-slate-200 dark:border-slate-800 pt-4">
-        <Field label="Email" name="email" type="email" defaultValue={viewer.email} required />
+        {canEditEmail ? (
+          <Field label="Email" name="email" type="email" defaultValue={viewer.email} required />
+        ) : (
+          <label className="block">
+            <span className="block text-xs font-medium mb-1">Email</span>
+            <input name="email" type="email" defaultValue={viewer.email} readOnly
+                   className="w-full rounded-md border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-2 py-1 text-sm text-slate-500" />
+            <span className="block text-[11px] text-slate-500 mt-1">
+              Only a super admin or whoever created this account can change its email.
+            </span>
+          </label>
+        )}
         <Field label="Name"  name="name"  defaultValue={viewer.name} required />
         <Field label="Phone" name="phone" defaultValue={viewer.phone ?? ""} />
         <label className="flex items-center gap-2 text-sm pt-5">
