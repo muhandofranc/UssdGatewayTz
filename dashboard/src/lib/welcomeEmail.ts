@@ -22,7 +22,7 @@ function body(w: WelcomeEmail): string {
   return [
     `Hello ${w.name},`,
     "",
-    "An account has been created for you on the UssdGatewayTz portal.",
+    "An account has been created for you on the Ussd portal.",
     "",
     `Sign in at: ${publicBaseUrl()}/login`,
     `Email:      ${w.to}`,
@@ -32,7 +32,6 @@ function body(w: WelcomeEmail): string {
     "at the top right, then \"Change password\". If you forget it, use",
     "\"Forgot password?\" on the sign-in page.",
     "",
-    `Your account was set up by ${w.createdBy}.`,
   ].join("\n");
 }
 
