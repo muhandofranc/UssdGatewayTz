@@ -330,6 +330,9 @@ services:
       # capacity conversations without ballooning disk. Bump if you
       # need longer for postmortems, and watch the tsdb size.
       - "--storage.tsdb.retention.time=30d"
+      # Disk cap: past this size the oldest blocks are deleted first, even
+      # within the 30 days (2026-11-20: blocks had grown to tens of GB).
+      - "--storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-20GB}"
       # Bind to a non-default port so Prometheus doesn't collide with
       # anything on 9090; adjust to 9090 if you have nothing else
       # using it.

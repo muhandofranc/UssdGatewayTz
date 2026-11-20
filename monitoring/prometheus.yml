@@ -106,6 +106,14 @@ scrape_configs:
   # `rabbitmq_prometheus` (bundled with RabbitMQ 3.8+) exposes
   # aggregated cluster + vhost metrics on :15692/metrics; per-queue
   # detail lives on the /metrics/detailed job below.
+    # cAdvisor exports dozens of series per container (per CPU, interface,
+    # filesystem...) for every container on every host, and each redeploy
+    # starts a new set. Keep only what the dashboards/alerts read.
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'container_(last_seen|start_time_seconds|oom_events_total|memory_rss|cpu_usage_seconds_total)'
+        action: keep
+
   - job_name: rabbitmq
     metrics_path: /metrics
     static_configs:
@@ -142,8 +150,13 @@ scrape_configs:
   - job_name: rabbitmq-per-queue-detailed
     scrape_interval: 30s
     metrics_path: /metrics/detailed
+    # Only the families the alerts/dashboards use: queue_coarse_metrics
+    # (rabbitmq_detailed_queue_messages[_ready|_unacked]) and
+    # queue_consumer_count. `queue_metrics` (~20 more series per queue, for
+    # EVERY queue on the shared broker) is not read anywhere and made each
+    # TSDB block's index 1-2 GB (2026-11-20). All queues stay watched.
     params:
-      family: [queue_coarse_metrics, queue_metrics, queue_consumer_count]
+      family: [queue_coarse_metrics, queue_consumer_count]
     static_configs:
       - targets: ["172.16.0.44:15692"]
         labels:
