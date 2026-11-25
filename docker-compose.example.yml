@@ -450,6 +450,15 @@ services:
       - /dev/kmsg
     command:
       - "--port=8082"
+      # Collect only what Prometheus keeps (monitoring/prometheus.yml cadvisor
+      # keep-list: cpu, memory rss, oom, last_seen, start_time). Defaults
+      # polled every cgroup on the host ~every second, gathered every metric
+      # family and walked /var/lib/docker for disk usage — high CPU that the
+      # scrape-side keep-list could not reduce.
+      - "--docker_only=true"
+      - "--housekeeping_interval=15s"
+      - "--store_container_labels=false"
+      - "--disable_metrics=percpu,sched,tcp,udp,hugetlb,referenced_memory,cpu_topology,resctrl,advtcp,process,disk,diskIO,network"
     # cAdvisor bakes a HEALTHCHECK into its image that probes
     # `http://localhost:8080` — the container's default port. We run
     # on 8082 (to sidestep collisions with anything on 8080), so the
