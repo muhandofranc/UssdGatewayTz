@@ -136,6 +136,15 @@ _NS       = {"soap": _SOAP_NS, "t": _TEMPURI}
 # only `<br>` markup is unescaped.
 _HALOTEL_MSG_MAX = 182
 _ESCAPED_BR_RE = re.compile(rb"&lt;\s*br\s*/?\s*&gt;", re.IGNORECASE)
+_NEWLINE_RE = re.compile(r"\r\n|\r|\n")
+
+
+def halotel_line_breaks(msg: str) -> str:
+    """Menus are written with `\n` like for every other MNO; Halotel's
+    handset ignores a raw newline and needs the literal `<br>` the legacy
+    walker sent (str_replace("\r\n", "<br>")). Convert every line break
+    (\r\n, \r, \n) so menus render the same on Halotel (2026-11-25)."""
+    return _NEWLINE_RE.sub("<br>", msg or "")
 
 
 _TYPE_EVENT_MAP: dict[str, SessionEvent] = {
@@ -523,7 +532,9 @@ class Halotel:
                 ur.session_id,
             )
 
-        msg_out = reply.message or ""
+        # `\n` -> `<br>` before the length check: Halotel counts the <br>
+        # (4 bytes) the handset sees, not the newline.
+        msg_out = halotel_line_breaks(reply.message or "")
         if len(msg_out) > _HALOTEL_MSG_MAX:
             LOGGER.warning(
                 "halotel outbound msg over %d chars (got %d) transactionid=%s — "
